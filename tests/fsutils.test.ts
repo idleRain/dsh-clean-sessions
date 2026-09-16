@@ -25,11 +25,16 @@ describe('formatBytes', () => {
 
 describe('isPathInside', () => {
   test('包含与不包含判断', () => {
-    assert.equal(isPathInside('C:\\a\\b\\c', 'C:\\a'), true)
-    assert.equal(isPathInside('C:\\a\\b', 'C:\\a'), true)
-    assert.equal(isPathInside('C:\\ab', 'C:\\a'), false)
-    assert.equal(isPathInside('D:\\a', 'C:\\a'), false)
-    assert.equal(isPathInside('C:\\a', 'C:\\a'), false)
+    // 用当前工作目录构造平台正确的绝对路径,Windows 风格路径在 POSIX 上不是合法分隔符
+    const base = process.cwd()
+    assert.equal(isPathInside(join(base, 'a', 'b', 'c'), join(base, 'a')), true)
+    assert.equal(isPathInside(join(base, 'a', 'b'), join(base, 'a')), true)
+    assert.equal(isPathInside(join(base, 'ab'), join(base, 'a')), false)
+    assert.equal(isPathInside(join(base, 'a'), join(base, 'a')), false)
+    // 跨盘符属于 Windows 特有语义,其余平台无法构造等价用例
+    if (process.platform === 'win32') {
+      assert.equal(isPathInside('D:\\a', 'C:\\a'), false)
+    }
   })
 })
 
@@ -79,7 +84,8 @@ describe('dirSizeBytes 与活跃度判断', () => {
     const fixture = makeFixture()
     try {
       const dir = makeSession(fixture.dshHome, 'proj-a', 'session-1', 120)
-      chmodSync(dir, 0o555)
+      // 枚举目录需要读权限位,须全部移除才能让 readdirSync 抛出权限错误
+      chmodSync(dir, 0o000)
       try {
         assert.equal(dirSizeBytes(dir), null)
         assert.equal(isRecentlyActive(dir, 30), true)
