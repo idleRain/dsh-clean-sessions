@@ -4,7 +4,7 @@
 [DSH(DeepSeek Harness)](https://github.com/deepseek-ai/deepseek-harness) 的已归档会话:
 删除归档名单中的会话日志目录,并同步归档名单与工作区槽位,不留幽灵条目与死槽位。
 
-[English](#english) · 开发与发布见 [CONTRIBUTING.md](https://github.com/idleRain/dsh-clean-sessions/CONTRIBUTING.md)
+[English](#english) · 开发与发布见 [CONTRIBUTING.md](https://github.com/idleRain/dsh-clean-sessions/blob/master/CONTRIBUTING.md)
 
 ## 为什么需要它
 
@@ -62,7 +62,7 @@ dsh-clean-sessions --home "D:\data\dsh"                         # 指定自定�
 
 ## 许可证
 
-[MIT](https://github.com/idleRain/dsh-clean-sessions/LICENSE)
+[MIT](https://github.com/idleRain/dsh-clean-sessions/blob/master/LICENSE)
 
 ---
 
@@ -73,7 +73,7 @@ A zero-runtime-dependency CLI to clean up archived sessions of
 it removes the session log directories listed in the archive and syncs the
 archive list and workspace slots, leaving no ghost entries behind.
 
-Development and release notes: [CONTRIBUTING.md](https://github.com/idleRain/dsh-clean-sessions/CONTRIBUTING.md) · [中文文档见上](#dsh-clean-sessions)
+Development and release notes: [CONTRIBUTING.md](https://github.com/idleRain/dsh-clean-sessions/blob/master/CONTRIBUTING.md) · [中文文档见上](#dsh-clean-sessions)
 
 ## Why this exists
 
@@ -140,4 +140,4 @@ dsh-clean-sessions --home "D:\data\dsh"                          # custom DSH ho
 
 ## License
 
-[MIT](https://github.com/idleRain/dsh-clean-sessions/LICENSE)
+[MIT](https://github.com/idleRain/dsh-clean-sessions/blob/master/LICENSE)
