@@ -4,17 +4,60 @@
  * @module dsh-clean-sessions
  */
 
-export { resolveDshHome, sessionsRoot, workspaceConfigPath, projectionCacheLegacyDir } from './paths.ts'
+export {
+  DSH_HOME_ENV,
+  attachmentsObjectsDir,
+  attachmentsTmpDir,
+  encodeSegment,
+  expandHomePath,
+  normalizeDshHome,
+  projectionCacheDir,
+  resolveDshHome,
+  sessionsRoot,
+  workspaceConfigPath,
+} from './paths.ts'
 export { preflight, readWorkspaceState, updateWorkspaceConfig, validateWorkspaceState } from './config.ts'
 export { buildPlan, collectGoneSessionIds } from './plan.ts'
+export {
+  SUBAGENT_ORIGIN,
+  buildSubagentChildIndex,
+  collectSubagentAncestors,
+  collectSubagentDescendants,
+  invertChildIndex,
+  normalizeSessionHeader,
+  readSessionLogHeader,
+} from './cascade.ts'
+export {
+  ZSTD_LOG_SUFFIX,
+  collectLogDigests,
+  collectReclaimableObjects,
+  measureAttachmentObjects,
+  readFrameSpans,
+  removeAttachmentObjects,
+  subtractDigests,
+} from './attachments.ts'
 export { applyClean } from './apply.ts'
 export { detectRunningDsh } from './detect.ts'
-export { formatBytes, findSessionDir, isPathInside, assertBackupDirOutsideHome } from './fsutils.ts'
+export { formatBytes, findSessionDir, inspectSessionsRoot, isPathInside, assertBackupDirOutsideHome } from './fsutils.ts'
 export { resolveLanguage, makeTranslator, translate } from './i18n.ts'
 export { ExitCode, UsageError, ConfigError, PreconditionError, LocalizedError } from './errors.ts'
+export type { PreflightOptions, PreflightResult } from './config.ts'
+export type { ChildIndexResult, HeaderReadResult, SessionHeader } from './cascade.ts'
+export type {
+  AttachmentObjectMeasure,
+  AttachmentRemovalOptions,
+  AttachmentRemovalResult,
+  FrameSpan,
+  FrameSpansResult,
+  LogDigestsResult,
+  ReclaimableResult,
+} from './attachments.ts'
+export type { SessionsRootInspection, SessionsRootStatus } from './fsutils.ts'
 export type {
   ApplyOptions,
   ApplyOutcome,
+  AttachmentReclaimOutcome,
+  BlockedReason,
   CleanPlan,
   CliOptions,
   ConfigUpdateResult,

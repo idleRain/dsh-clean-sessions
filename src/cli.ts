@@ -11,13 +11,14 @@ import { createInterface } from 'node:readline/promises'
 import { stdin, stdout } from 'node:process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { CleanPlan, CliOptions } from './types.ts'
+import type { ApplyOutcome, CleanPlan, CliOptions } from './types.ts'
 import { ExitCode, LocalizedError, UsageError, type ExitCodeValue } from './errors.ts'
 import { makeTranslator, resolveLanguage, type Translate } from './i18n.ts'
-import { resolveDshHome } from './paths.ts'
+import { normalizeDshHome, resolveDshHome } from './paths.ts'
 import { preflight, readWorkspaceState } from './config.ts'
 import { buildPlan } from './plan.ts'
 import { applyClean } from './apply.ts'
+import { collectReclaimableObjects, measureAttachmentObjects } from './attachments.ts'
 import { detectRunningDsh } from './detect.ts'
 import { assertBackupDirOutsideHome, formatBytes } from './fsutils.ts'
 import { bold, green, red, yellow } from './style.ts'
@@ -25,15 +26,20 @@ import { bold, green, red, yellow } from './style.ts'
 /** 默认把最近仍可能活跃的归档会话视为可疑的最小空闲间隔,单位为分钟。 */
 const DEFAULT_MIN_AGE_MINUTES = 30
 
+/** 视为同意的确认输入,其余输入一律按拒绝处理。 */
+const AFFIRMATIVE_ANSWERS = new Set(['y', 'yes'])
+
 /** 解析命令行参数,布尔参数不接受值,值参数同时支持 --flag value 与 --flag=value。 */
 export function parseArgs(argv: readonly string[]): CliOptions {
   const options: CliOptions = {
     apply: false,
-    yes: false,
     minAgeMinutes: DEFAULT_MIN_AGE_MINUTES,
     includeRecent: false,
+    keepChildren: false,
+    keepAttachments: false,
     backupDir: undefined,
     updateConfig: true,
+    allowMissingSessions: false,
     dshHome: resolveDshHome(),
     help: false,
     version: false,
@@ -46,17 +52,25 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         assertNoValue(flag, inlineValue)
         options.apply = true
         break
-      case '--yes':
-        assertNoValue(flag, inlineValue)
-        options.yes = true
-        break
       case '--include-recent':
         assertNoValue(flag, inlineValue)
         options.includeRecent = true
         break
+      case '--keep-children':
+        assertNoValue(flag, inlineValue)
+        options.keepChildren = true
+        break
+      case '--keep-attachments':
+        assertNoValue(flag, inlineValue)
+        options.keepAttachments = true
+        break
       case '--no-config':
         assertNoValue(flag, inlineValue)
         options.updateConfig = false
+        break
+      case '--allow-missing-sessions':
+        assertNoValue(flag, inlineValue)
+        options.allowMissingSessions = true
         break
       case '--help':
         assertNoValue(flag, inlineValue)
@@ -73,7 +87,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         options.backupDir = parseNonEmptyValue(inlineValue ?? argv[++index], '--backup')
         break
       case '--home':
-        options.dshHome = parseNonEmptyValue(inlineValue ?? argv[++index], '--home')
+        options.dshHome = normalizeDshHome(parseNonEmptyValue(inlineValue ?? argv[++index], '--home'))
         break
       case '--lang': {
         const value = parseNonEmptyValue(inlineValue ?? argv[++index], '--lang')
@@ -132,8 +146,22 @@ function describeSize(sizeBytes: number | null): string {
   return sizeBytes === null ? UNKNOWN_SIZE_TEXT : formatBytes(sizeBytes)
 }
 
-/** 打印清理计划,分别列出待删除、活跃嫌疑排除项、幽灵条目与路径不安全项。 */
+/** 子代理关系诊断最多展示的条数,避免长列表淹没计划主体。 */
+const MAX_CASCADE_DIAGNOSTIC_LINES = 5
+
+/** 打印清理计划,分别列出待删除、级联后代、被阻止的祖先、活跃嫌疑、幽灵条目与逃逸项。 */
 function printPlan(plan: CleanPlan, minAgeMinutes: number, t: Translate): void {
+  printToDeleteSection(plan, t)
+  printCascadeSection(plan, t)
+  printBlockedSection(plan, t)
+  printRecentSection(plan, minAgeMinutes, t)
+  printGhostSection(plan, t)
+  printUnsafeSection(plan, t)
+  printCascadeDiagnosticsSection(plan, t)
+}
+
+/** 打印归档名单内的待删会话。 */
+function printToDeleteSection(plan: CleanPlan, t: Translate): void {
   const totalBytes = plan.toDelete.reduce((sum, item) => sum + (item.sizeBytes ?? 0), 0)
   console.log(bold(t('toDeleteHeader', { count: plan.toDelete.length, size: formatBytes(totalBytes) })))
   for (const item of plan.toDelete) {
@@ -144,58 +172,150 @@ function printPlan(plan: CleanPlan, minAgeMinutes: number, t: Translate): void {
       recentMark: item.recent ? t('recentMark') : '',
     }))
   }
-  if (plan.recentExcluded.length > 0) {
-    console.log(yellow(`\n${t('recentExcludedHeader', { count: plan.recentExcluded.length, minutes: minAgeMinutes })}`))
-    for (const item of plan.recentExcluded) {
-      console.log(t('planRow', {
-        id: item.id,
-        project: item.location?.projectDir ?? '-',
-        size: describeSize(item.sizeBytes),
-        recentMark: '',
-      }))
-    }
-    console.log(t('recentExcludedHint'))
+}
+
+/** 打印随父会话级联删除的子代理后代,并标注其直接来源。 */
+function printCascadeSection(plan: CleanPlan, t: Translate): void {
+  if (plan.cascade.length === 0) return
+  const totalBytes = plan.cascade.reduce((sum, item) => sum + (item.sizeBytes ?? 0), 0)
+  console.log(yellow(`\n${t('cascadeHeader', { count: plan.cascade.length, size: formatBytes(totalBytes) })}`))
+  for (const item of plan.cascade) {
+    console.log(t('cascadeRow', {
+      id: item.id,
+      project: item.location?.projectDir ?? '-',
+      size: describeSize(item.sizeBytes),
+      source: item.cascadeSource ?? '-',
+    }))
   }
-  if (plan.ghosts.length > 0) {
-    console.log(`\n${t('ghostsHeader', { count: plan.ghosts.length })}`)
-    for (const item of plan.ghosts) {
-      console.log(`  ${item.id}`)
-    }
-    console.log(t('ghostHint'))
+  console.log(t('cascadeHint'))
+}
+
+/** 打印因后代无法处理而保留的归档会话及其原因。 */
+function printBlockedSection(plan: CleanPlan, t: Translate): void {
+  if (plan.blocked.length === 0) return
+  console.log(yellow(`\n${t('blockedHeader', { count: plan.blocked.length })}`))
+  for (const item of plan.blocked) {
+    console.log(t('blockedRow', {
+      id: item.id,
+      project: item.location?.projectDir ?? '-',
+      reason: item.blockedReason === undefined ? '-' : t(item.blockedReason.key, item.blockedReason.params),
+    }))
   }
-  if (plan.unsafe.length > 0) {
-    console.log(red(`\n${t('unsafeHeader', { count: plan.unsafe.length })}`))
-    for (const item of plan.unsafe) {
-      console.log(`  ${item.id}  ${item.location?.projectDir ?? '-'}`)
-    }
-    console.log(t('unsafeHint'))
+  console.log(t('blockedHint'))
+}
+
+/** 打印最近有写入而被排除的归档会话。 */
+function printRecentSection(plan: CleanPlan, minAgeMinutes: number, t: Translate): void {
+  if (plan.recentExcluded.length === 0) return
+  console.log(yellow(`\n${t('recentExcludedHeader', { count: plan.recentExcluded.length, minutes: minAgeMinutes })}`))
+  for (const item of plan.recentExcluded) {
+    console.log(t('planRow', {
+      id: item.id,
+      project: item.location?.projectDir ?? '-',
+      size: describeSize(item.sizeBytes),
+      recentMark: '',
+    }))
+  }
+  console.log(t('recentExcludedHint'))
+}
+
+/** 打印磁盘上已无目录的配置残留。 */
+function printGhostSection(plan: CleanPlan, t: Translate): void {
+  if (plan.ghosts.length === 0) return
+  console.log(`\n${t('ghostsHeader', { count: plan.ghosts.length })}`)
+  for (const item of plan.ghosts) {
+    console.log(`  ${item.id}`)
+  }
+  console.log(t('ghostHint'))
+}
+
+/** 打印解析结果逃逸出 sessions 根目录的会话。 */
+function printUnsafeSection(plan: CleanPlan, t: Translate): void {
+  if (plan.unsafe.length === 0) return
+  console.log(red(`\n${t('unsafeHeader', { count: plan.unsafe.length })}`))
+  for (const item of plan.unsafe) {
+    console.log(`  ${item.id}  ${item.location?.projectDir ?? '-'}`)
+  }
+  console.log(t('unsafeHint'))
+}
+
+/** 打印子代理关系诊断,超过展示上限的条目只计入总数。 */
+function printCascadeDiagnosticsSection(plan: CleanPlan, t: Translate): void {
+  if (plan.cascadeWarnings.length === 0) return
+  console.log(yellow(`\n${t('cascadeDiagnosticsHeader', { count: plan.cascadeWarnings.length })}`))
+  for (const warning of plan.cascadeWarnings.slice(0, MAX_CASCADE_DIAGNOSTIC_LINES)) {
+    console.log(`  ${warning}`)
+  }
+  console.log(t('cascadeDiagnosticsHint'))
+}
+
+/**
+ * 打印附件对象的预计回收量。
+ * 预览阶段只做统计不修改文件;引用无法确认时说明执行阶段会重新校验。
+ */
+function printAttachmentPreview(options: CliOptions, plan: CleanPlan, t: Translate): void {
+  if (options.keepAttachments) {
+    console.log(yellow(`\n${t('keepAttachmentsHint')}`))
+    return
+  }
+  const deletedIds = new Set([...plan.toDelete, ...plan.cascade].map(item => item.id))
+  if (deletedIds.size === 0) return
+  const collected = collectReclaimableObjects(options.dshHome, deletedIds)
+  if (collected.kind === 'aborted') {
+    console.log(yellow(`\n${t('attachmentsPreviewDeferred', { reason: collected.reason })}`))
+    return
+  }
+  const measured = measureAttachmentObjects(options.dshHome, collected.digests)
+  console.log(`\n${t('attachmentsPreview', { count: measured.count, size: formatBytes(measured.bytes) })}`)
+}
+
+/** 打印附件对象的实际回收结果,整体跳过时只说明原因。 */
+function printAttachmentOutcome(outcome: ApplyOutcome, t: Translate): void {
+  const attachments = outcome.attachments
+  if (attachments === undefined) return
+  if (attachments.skippedReason !== undefined) {
+    console.warn(yellow(t('attachmentsSkipped', { detail: attachments.skippedReason })))
+    return
+  }
+  console.log(t('attachmentsReclaimed', {
+    count: attachments.removedCount,
+    size: formatBytes(attachments.removedBytes),
+  }))
+  if (attachments.failures.length === 0) return
+  console.error(red(t('attachmentsRemovalFailed', { count: attachments.failures.length })))
+  for (const failure of attachments.failures) {
+    console.error(`  ${failure}`)
   }
 }
 
-/** 在终端询问确认问题,非交互环境默认拒绝,输入以 y 或 yes 开头视为同意。 */
+/** 提示确认问题,只有输入 y 或 yes 才算同意;未收到输入时按拒绝处理,不阻塞等待。 */
 async function confirm(promptText: string): Promise<boolean> {
-  if (stdin.isTTY !== true) return false
   const readline = createInterface({ input: stdin, output: stdout })
-  let answer = ''
   try {
-    answer = (await readline.question(`${promptText} [y/N] `)).trim().toLowerCase()
+    const onClose = new Promise<string>(resolve => {
+      readline.once('close', () => resolve(''))
+    })
+    const answered = readline.question(`${promptText} [y/N] `).catch(() => '')
+    const answer = await Promise.race([answered, onClose])
+    return AFFIRMATIVE_ANSWERS.has(answer.trim().toLowerCase())
   } catch {
-    answer = ''
+    return false
   } finally {
     readline.close()
   }
-  return answer === 'y' || answer === 'yes'
 }
 
 /** 执行清理流程:前置检查、读取名单、构建计划、预览或执行删除与配置同步。 */
 async function run(options: CliOptions, t: Translate): Promise<ExitCodeValue> {
   console.log(t('dshHome', { path: options.dshHome }))
-  const preflightResult = preflight(options.dshHome)
+  const preflightResult = preflight(options.dshHome, { allowMissingSessions: options.allowMissingSessions })
   if (options.backupDir !== undefined) {
     assertBackupDirOutsideHome(options.backupDir, options.dshHome)
   }
-  if (!preflightResult.sessionsRootExists) {
-    console.warn(yellow(t('sessionsRootMissing', { path: preflightResult.sessionsRootDir })))
+  if (preflightResult.sessionsRootStatus !== 'usable') {
+    // 根目录不可用时任何 id 都无法核实,既不能删除也不能从配置中摘除
+    console.warn(yellow(t('sessionsRootSkipped', { path: preflightResult.sessionsRootDir })))
+    return ExitCode.Ok
   }
   const state = readWorkspaceState(options.dshHome)
   const archivedIds = state.global.archivedSessionIds ?? []
@@ -203,8 +323,18 @@ async function run(options: CliOptions, t: Translate): Promise<ExitCodeValue> {
     console.log(green(t('noArchived')))
     return ExitCode.Ok
   }
-  const plan = buildPlan(options.dshHome, archivedIds, options.minAgeMinutes, options.includeRecent)
+  const plan = buildPlan(
+    options.dshHome,
+    archivedIds,
+    options.minAgeMinutes,
+    options.includeRecent,
+    options.keepChildren,
+  )
   printPlan(plan, options.minAgeMinutes, t)
+  if (options.keepChildren) {
+    console.log(yellow(`\n${t('keepChildrenHint')}`))
+  }
+  printAttachmentPreview(options, plan, t)
   if (!options.apply) {
     console.log(`\n${t('previewFooter')}`)
     return ExitCode.Ok
@@ -213,24 +343,26 @@ async function run(options: CliOptions, t: Translate): Promise<ExitCodeValue> {
     console.log(t('nothingToDo'))
     return ExitCode.Ok
   }
-  const totalBytes = plan.toDelete.reduce((sum, item) => sum + (item.sizeBytes ?? 0), 0)
-  if (!options.yes) {
-    const approved = await confirm(t('confirmPrompt', { count: plan.toDelete.length, size: formatBytes(totalBytes) }))
-    if (!approved) {
-      console.log(t('cancelled'))
-      return ExitCode.Ok
-    }
+  const removalCount = plan.toDelete.length + plan.cascade.length
+  const totalBytes = [...plan.toDelete, ...plan.cascade].reduce((sum, item) => sum + (item.sizeBytes ?? 0), 0)
+  const approved = await confirm(t('confirmPrompt', { count: removalCount, size: formatBytes(totalBytes) }))
+  if (!approved) {
+    console.log(t('cancelled'))
+    return ExitCode.Ok
   }
-  const outcome = applyClean(options.dshHome, archivedIds, plan, {
+  const outcome = applyClean(options.dshHome, plan, {
     backupDir: options.backupDir,
     updateConfig: options.updateConfig,
+    keepAttachments: options.keepAttachments,
   })
   console.log(`\n${green(t('removedSummary', { count: outcome.removedCount }))}`)
+  console.log(t('cascadeRemovedSummary', { count: outcome.cascadeRemovedCount }))
   console.log(t('cacheCleaned', { count: outcome.cleanedCacheCount }))
   console.log(t('emptiedProjects', {
     count: outcome.emptiedProjects.length,
     list: outcome.emptiedProjects.join(', ') || '-',
   }))
+  printAttachmentOutcome(outcome, t)
   if (outcome.configError !== undefined) {
     console.error(red(t('configSyncFailed', { detail: outcome.configError })))
   } else if (outcome.configResult !== undefined) {
@@ -258,7 +390,9 @@ async function run(options: CliOptions, t: Translate): Promise<ExitCodeValue> {
   if (options.backupDir !== undefined) {
     console.log(t('backupNotice', { path: options.backupDir }))
   }
-  const hasFailure = outcome.failures.length > 0 || outcome.configError !== undefined
+  const hasFailure = outcome.failures.length > 0
+    || outcome.configError !== undefined
+    || (outcome.attachments?.failures.length ?? 0) > 0
   return hasFailure ? ExitCode.PartialFailure : ExitCode.Ok
 }
 

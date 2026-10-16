@@ -23,6 +23,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { SessionLocation, SessionPlan } from './types.ts'
 import { PreconditionError } from './errors.ts'
+import { encodeSegment } from './paths.ts'
 
 /** 删除目录的最大重试次数,应对文件被进程瞬时占用的情况。 */
 export const DELETE_RETRY_COUNT = 3
@@ -75,22 +76,72 @@ export function assertBackupDirOutsideHome(backupDir: string, dshHome: string): 
   }
 }
 
-/** 在 sessions 根目录下按项目分组查找某个会话目录,未找到时返回 undefined。 */
-export function findSessionDir(sessionsRootDir: string, sessionId: string): SessionLocation | undefined {
-  let projectDirs: Dirent[]
+/** sessions 根目录的可用性状态,用于区分"不存在"与"读不到"。 */
+export type SessionsRootStatus = 'usable' | 'missing' | 'unavailable'
+
+/** sessions 根目录的探测结果,不可用时携带底层错误或原因描述。 */
+export interface SessionsRootInspection {
+  status: SessionsRootStatus
+  detail: string
+}
+
+/** 判断错误是否表示路径确实不存在,其余错误码一律视为不可核实。 */
+function isAbsentError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT'
+}
+
+/** 把未知错误转成可展示的字符串。 */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** 探测 sessions 根目录是否可用,无法枚举的目录不会被当作"不存在"。 */
+export function inspectSessionsRoot(sessionsRootDir: string): SessionsRootInspection {
   try {
-    projectDirs = readdirSync(sessionsRootDir, { withFileTypes: true })
-      .filter(entry => entry.isDirectory() || entry.isSymbolicLink())
-  } catch {
-    return undefined
-  }
-  for (const entry of projectDirs) {
-    const candidate = join(sessionsRootDir, entry.name, sessionId)
-    if (existsSync(candidate) && statSync(candidate).isDirectory()) {
-      return { dir: candidate, projectDir: entry.name }
+    if (!statSync(sessionsRootDir).isDirectory()) {
+      return { status: 'unavailable', detail: 'path exists but is not a directory' }
     }
+    readdirSync(sessionsRootDir)
+    return { status: 'usable', detail: '' }
+  } catch (error) {
+    return isAbsentError(error)
+      ? { status: 'missing', detail: '' }
+      : { status: 'unavailable', detail: describeError(error) }
+  }
+}
+
+/**
+ * 在 sessions 根目录下按项目分组查找某个会话目录。
+ * 返回 undefined 仅表示已确认不存在;根目录与候选路径读不到时抛出前置条件错误终止流程。
+ */
+export function findSessionDir(sessionsRootDir: string, sessionId: string): SessionLocation | undefined {
+  const dirName = encodeSegment(sessionId)
+  for (const projectEntry of listProjectEntries(sessionsRootDir)) {
+    const candidate = join(sessionsRootDir, projectEntry.name, dirName)
+    if (isSessionDir(candidate)) return { dir: candidate, projectDir: projectEntry.name }
   }
   return undefined
+}
+
+/** 列出 sessions 根目录下的项目分组,根目录缺失或不可读时抛出前置条件错误。 */
+function listProjectEntries(sessionsRootDir: string): Dirent[] {
+  try {
+    return readdirSync(sessionsRootDir, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() || entry.isSymbolicLink())
+  } catch (error) {
+    const key = isAbsentError(error) ? 'sessionsRootMissing' : 'sessionsRootUnavailable'
+    throw new PreconditionError(key, { path: sessionsRootDir, detail: describeError(error) })
+  }
+}
+
+/** 探测候选会话目录是否存在,仅 ENOENT 视为不存在,其余错误视为不可核实并抛出。 */
+function isSessionDir(candidate: string): boolean {
+  try {
+    return statSync(candidate).isDirectory()
+  } catch (error) {
+    if (isAbsentError(error)) return false
+    throw new PreconditionError('sessionDirUnverifiable', { path: candidate, detail: describeError(error) })
+  }
 }
 
 /** 递归累加目录内全部文件的总字节数,目录不可读时返回 null 表示大小未知。 */
@@ -151,15 +202,16 @@ function sleepSync(millis: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, millis)
 }
 
-/** 递归删除目录,对瞬时占用错误做有限次重试,最终失败时抛出最后一个错误。 */
-export function removeDirWithRetry(dir: string): void {
-  let lastError: unknown
+/**
+ * 执行一次删除动作,对瞬时占用错误做有限次重试。
+ * 非瞬时错误与重试耗尽都会抛出,由调用方决定记录后继续还是中断流程。
+ */
+function removeWithRetry(action: () => void): void {
   for (let attempt = 1; attempt <= DELETE_RETRY_COUNT; attempt++) {
     try {
-      rmSync(dir, { recursive: true, force: true })
+      action()
       return
     } catch (error) {
-      lastError = error
       const code = (error as NodeJS.ErrnoException).code
       if (code === undefined || !TRANSIENT_LOCK_CODES.has(code) || attempt === DELETE_RETRY_COUNT) {
         throw error
@@ -167,7 +219,11 @@ export function removeDirWithRetry(dir: string): void {
       sleepSync(DELETE_RETRY_DELAY_MILLIS)
     }
   }
-  throw lastError
+}
+
+/** 递归删除目录,对瞬时占用错误做有限次重试,最终失败时抛出最后一个错误。 */
+export function removeDirWithRetry(dir: string): void {
+  removeWithRetry(() => rmSync(dir, { recursive: true, force: true }))
 }
 
 /** 删除或移动一个会话目录;移动时先尝试 rename,跨卷失败则复制后删除原目录。 */
@@ -188,17 +244,33 @@ export function removeSessionDir(item: SessionPlan, backupDir: string | undefine
   }
 }
 
-/** 删除投影缓存旧 per-record 遗留文档中与指定 id 对应的文件,返回清理数量。 */
-export function cleanProjectionCacheLegacy(dshHome: string, projectionCacheDir: string, removedIds: ReadonlySet<string>): number {
+/** 投影缓存文档的清理结果,失败项以列表返回供调用方汇总。 */
+export interface ProjectionCacheCleanResult {
+  cleanedCount: number
+  failures: string[]
+}
+
+/**
+ * 删除投影缓存中与指定 id 对应的 per-record 文档。
+ * 单项删除失败记入 failures 而不抛出,避免中断其后的配置同步。
+ */
+export function cleanProjectionCache(
+  projectionCacheDir: string,
+  removedIds: ReadonlySet<string>,
+): ProjectionCacheCleanResult {
   let cleanedCount = 0
+  const failures: string[] = []
   for (const id of removedIds) {
     const documentPath = join(projectionCacheDir, `${id}.json`)
-    if (existsSync(documentPath)) {
-      rmSync(documentPath, { force: true })
+    if (!existsSync(documentPath)) continue
+    try {
+      removeWithRetry(() => rmSync(documentPath, { force: true }))
       cleanedCount += 1
+    } catch (error) {
+      failures.push(`projection cache ${id}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  return cleanedCount
+  return { cleanedCount, failures }
 }
 
 /** 移除 sessions 根目录下已经完全为空的项目分组,返回被移除的分组名。 */
