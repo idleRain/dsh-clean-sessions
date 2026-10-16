@@ -20,6 +20,8 @@ const zh = {
   --include-recent     强制纳入最近有写入的归档会话,默认排除
   --backup <目录>       把会话目录移入备份目录而非直接删除,目录不能位于 DSH 主目录之内
   --no-config          只删除磁盘目录,不同步 workspace.json 配置
+  --allow-missing-sessions
+                       会话根目录缺失或不可用时仍继续执行,此时候选会话无法核实,配置保持不变
   --home <目录>         指定 DSH 主目录,默认读取 $DSH_HOME 或 ~/.dsh
   --lang <zh|en>       提示语言,默认检测主机语言,中文简繁用中文,其余用英文
   --version            输出版本号
@@ -28,7 +30,7 @@ const zh = {
 安全说明:
   1. 默认仅预览,必须显式传入 --apply 才会修改任何文件。
   2. 若 dsh 正在运行,修改配置后必须重启 dsh,否则内存中的旧名单会被写回。
-  3. 附件存储与 session_projcache.json 单文件缓存不会被清理。
+  3. 附件存储与 session_projcache.json 单文件历史缓存不会被清理。
 `,
   dshHome: 'DSH 主目录: {path}',
   noArchived: '没有已归档的会话,无需处理。',
@@ -46,7 +48,7 @@ const zh = {
   confirmPrompt: '将移除 {count} 个会话,约 {size},是否继续?',
   cancelled: '已取消,未修改任何文件。',
   removedSummary: '已移除会话目录: {count} 个',
-  cacheCleaned: '已清理投影缓存遗留文档: {count} 个',
+  cacheCleaned: '已清理投影缓存文档: {count} 个',
   emptiedProjects: '已移除空项目分组: {count} 个 ({list})',
   configSynced: '配置同步完成: 归档名单剩余 {kept} 个, 移除工作区槽位 {slots} 个',
   configSkipped: '已跳过配置同步,请自行处理 workspace.json。',
@@ -54,9 +56,12 @@ const zh = {
   failureHeader: '移除失败 {count} 项:',
   failureHint: '会话可能被运行中的 dsh 进程占用,可稍后重试,或先重启 dsh。',
   dshRunningWarn: '检测到 dsh 正在运行:workspace.json 的内存副本仍是旧名单。\n请先重启 dsh,再执行任何工作区或会话操作,否则旧名单会被写回并产生幽灵条目。',
-  dshMaybeRunning: '若 dsh 正在运行,请重启后再操作工作区;本机未检测到 dsh 进程则无需处理。',
+  dshMaybeRunning: '本机未探测到 dsh 进程;DeepSeek Harness 桌面应用同样属于 dsh,请确认桌面应用与其他 profile 的宿主进程都已退出,再操作工作区。',
   backupNotice: '备份目录: {path},确认无误后可手动清空。',
-  sessionsRootMissing: '会话目录不存在: {path},所有归档会话将被视为幽灵条目。',
+  sessionsRootMissing: '会话目录不存在: {path}。请检查 --home 与 $DSH_HOME 是否指向预期的 DSH 主目录;$DSH_HOME 或 profile 的 cordis.patch.yml 的 patch 可能把 sessions 根改到了别处。若确认要跳过清点,可显式加 --allow-missing-sessions。',
+  sessionsRootUnavailable: '会话目录不可用: {path},错误: {detail}。请检查该路径是否为可枚举的目录,并核对 --home 与 $DSH_HOME;$DSH_HOME 或 profile 的 cordis.patch.yml 的 patch 可能把 sessions 根改到了别处。',
+  sessionDirUnverifiable: '无法确认会话目录是否存在: {path},错误: {detail}。请检查该路径的读取权限后重试,本次未修改任何文件。',
+  sessionsRootSkipped: '会话根目录不可用: {path},已按 --allow-missing-sessions 跳过清点。\n配置保持不变:无法核实是否存在的归档会话不会被当作已消失。',
   unknownArgument: '未知参数: {argument}',
   unexpectedValue: '参数 {flag} 不接受值。',
   invalidNumber: '参数 {flag} 需要一个非负整数,实际得到: {value}',
@@ -87,6 +92,9 @@ Options:
   --backup <dir>       Move session directories into a backup dir instead of
                        deleting; must be outside the DSH home
   --no-config          Only remove on-disk directories, skip workspace.json sync
+  --allow-missing-sessions
+                       Continue when the sessions root is missing or unusable;
+                       candidates cannot be verified and the config stays unchanged
   --home <dir>         DSH home directory; defaults to $DSH_HOME or ~/.dsh
   --lang <zh|en>       Message language; defaults to the host language, Chinese
                        for any zh locale, otherwise English
@@ -97,8 +105,8 @@ Safety notes:
   1. Preview only by default; pass --apply to change anything.
   2. If dsh is running, restart it after the config change, otherwise the
      in-memory archive list is written back and ghost entries reappear.
-  3. The attachment store and the session_projcache.json single-file cache
-     are never touched.
+  3. The attachment store and the legacy single-file session_projcache.json
+     cache are never touched.
 `,
   dshHome: 'DSH home: {path}',
   noArchived: 'No archived sessions to process.',
@@ -116,7 +124,7 @@ Safety notes:
   confirmPrompt: 'Remove {count} sessions, about {size}. Continue?',
   cancelled: 'Cancelled, no changes were made.',
   removedSummary: 'Removed session directories: {count}',
-  cacheCleaned: 'Cleaned projection cache legacy documents: {count}',
+  cacheCleaned: 'Cleaned projection cache documents: {count}',
   emptiedProjects: 'Removed empty project groups: {count} ({list})',
   configSynced: 'Config synced: {kept} archived remain, {slots} workspace slots removed',
   configSkipped: 'Config sync skipped; handle workspace.json yourself.',
@@ -124,9 +132,12 @@ Safety notes:
   failureHeader: 'Failed to remove {count} item(s):',
   failureHint: 'A session may be locked by a running dsh process; retry later or restart dsh first.',
   dshRunningWarn: 'dsh appears to be running: the in-memory copy of workspace.json still holds the old archive list.\nRestart dsh before any workspace or session action, otherwise the old list is written back and ghost entries reappear.',
-  dshMaybeRunning: 'If dsh is running, restart it before workspace actions; no dsh process was detected on this machine.',
+  dshMaybeRunning: 'No dsh process was detected on this machine; the DeepSeek Harness desktop app also counts as dsh, so make sure it and the host processes of other profiles have exited before touching workspace data.',
   backupNotice: 'Backup directory: {path}; empty it manually once verified.',
-  sessionsRootMissing: 'Sessions directory does not exist: {path}; all archived sessions will be treated as ghost entries.',
+  sessionsRootMissing: 'Sessions directory does not exist: {path}. Check that --home and $DSH_HOME point to the expected DSH home; a patch in $DSH_HOME or the profile cordis.patch.yml can relocate the sessions root. Pass --allow-missing-sessions to skip the scan explicitly.',
+  sessionsRootUnavailable: 'Sessions directory is unusable: {path}; error: {detail}. Check that the path is an enumerable directory and verify --home and $DSH_HOME; a patch in $DSH_HOME or the profile cordis.patch.yml can relocate the sessions root.',
+  sessionDirUnverifiable: 'Cannot verify whether the session directory exists: {path}; error: {detail}. Check read access to this path and retry; nothing was modified.',
+  sessionsRootSkipped: 'Sessions root is unusable: {path}; the scan was skipped because --allow-missing-sessions was given.\nThe config is left unchanged: archived sessions that cannot be verified are never treated as gone.',
   unknownArgument: 'Unknown argument: {argument}',
   unexpectedValue: 'Argument {flag} does not accept a value.',
   invalidNumber: 'Argument {flag} requires a non-negative integer, got: {value}',

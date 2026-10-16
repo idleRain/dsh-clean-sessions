@@ -6,21 +6,31 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import type { ConfigUpdateResult, WorkspaceState } from './types.ts'
 import { ConfigError, PreconditionError } from './errors.ts'
-import { sessionsRoot, workspaceConfigPath } from './paths.ts'
-import { atomicWriteJson } from './fsutils.ts'
-import { collectGoneSessionIds } from './plan.ts'
+import { DSH_HOME_ENV, sessionsRoot, workspaceConfigPath } from './paths.ts'
+import { atomicWriteJson, inspectSessionsRoot, type SessionsRootStatus } from './fsutils.ts'
 
 /** 前置条件检查的结果,主流程据此决定后续步骤。 */
 export interface PreflightResult {
   configPath: string
   sessionsRootDir: string
   sessionsRootExists: boolean
+  /** 会话根目录的可用性;未放行时 preflight 已在不可用的情况下抛出异常。 */
+  sessionsRootStatus: SessionsRootStatus
 }
 
-/** 校验前置条件:主目录存在、配置文件存在且可读,缺一即抛 PreconditionError。 */
-export function preflight(dshHome: string): PreflightResult {
+/** preflight 的可选行为。 */
+export interface PreflightOptions {
+  /** 会话根目录缺失或不可用时是否放行,默认拒绝。 */
+  allowMissingSessions: boolean
+}
+
+/** 默认拒绝在会话根目录不可用时继续。 */
+const DEFAULT_PREFLIGHT_OPTIONS: PreflightOptions = { allowMissingSessions: false }
+
+/** 校验前置条件:主目录存在、配置文件可读、会话根目录可用,任一不满足即抛 PreconditionError。 */
+export function preflight(dshHome: string, options: PreflightOptions = DEFAULT_PREFLIGHT_OPTIONS): PreflightResult {
   if (!existsSync(dshHome) || !statSync(dshHome).isDirectory()) {
-    throw new PreconditionError('homeMissing', { path: dshHome, env: 'DSH_HOME' })
+    throw new PreconditionError('homeMissing', { path: dshHome, env: DSH_HOME_ENV })
   }
   const configPath = workspaceConfigPath(dshHome)
   if (!existsSync(configPath)) {
@@ -35,8 +45,18 @@ export function preflight(dshHome: string): PreflightResult {
     })
   }
   const sessionsRootDir = sessionsRoot(dshHome)
-  const sessionsRootExists = existsSync(sessionsRootDir) && statSync(sessionsRootDir).isDirectory()
-  return { configPath, sessionsRootDir, sessionsRootExists }
+  const inspection = inspectSessionsRoot(sessionsRootDir)
+  if (inspection.status !== 'usable' && !options.allowMissingSessions) {
+    throw inspection.status === 'missing'
+      ? new PreconditionError('sessionsRootMissing', { path: sessionsRootDir })
+      : new PreconditionError('sessionsRootUnavailable', { path: sessionsRootDir, detail: inspection.detail })
+  }
+  return {
+    configPath,
+    sessionsRootDir,
+    sessionsRootExists: inspection.status === 'usable',
+    sessionsRootStatus: inspection.status,
+  }
 }
 
 /** 抛出结构无效错误,detail 使用英文技术描述以便于检索。 */
@@ -75,6 +95,13 @@ export function validateWorkspaceState(value: unknown): WorkspaceState {
     if (!isStringArray(value.global.archivedSessionIds)) invalid('global.archivedSessionIds must be an array of strings')
     assertSafeSessionIds(value.global.archivedSessionIds, 'global.archivedSessionIds')
   }
+  if (value.global.pinnedSessionIds !== undefined) {
+    if (!isStringArray(value.global.pinnedSessionIds)) invalid('global.pinnedSessionIds must be an array of strings')
+    assertSafeSessionIds(value.global.pinnedSessionIds, 'global.pinnedSessionIds')
+  }
+  if (value.global.defaultWorkspaceId !== undefined && typeof value.global.defaultWorkspaceId !== 'string') {
+    invalid('global.defaultWorkspaceId must be a string')
+  }
   if (!isRecord(value.tables) || !isRecord(value.tables.workspaces)) {
     invalid('tables.workspaces must be an object')
   }
@@ -109,12 +136,18 @@ export function readWorkspaceState(dshHome: string): WorkspaceState {
   return validateWorkspaceState(parsed)
 }
 
-/** 同步配置:从归档名单与各工作区槽位中移除磁盘上已不存在的会话 id。 */
-export function updateWorkspaceConfig(dshHome: string): ConfigUpdateResult {
+/**
+ * 同步配置:从归档名单、工作区槽位与置顶集合中移除调用方已确认消失的会话 id。
+ * goneIds 必须来自清理计划与本次删除结果,不得由本函数重新扫盘推断。
+ * 未知字段随原对象一并写回,不会被丢弃。
+ */
+export function updateWorkspaceConfig(dshHome: string, goneIds: ReadonlySet<string>): ConfigUpdateResult {
   const state = readWorkspaceState(dshHome)
   const archivedIds = state.global.archivedSessionIds ?? []
-  const goneIds = collectGoneSessionIds(dshHome, archivedIds)
   state.global.archivedSessionIds = archivedIds.filter(id => !goneIds.has(id))
+  if (state.global.pinnedSessionIds !== undefined) {
+    state.global.pinnedSessionIds = state.global.pinnedSessionIds.filter(id => !goneIds.has(id))
+  }
   let slotsRemoved = 0
   for (const record of Object.values(state.tables.workspaces)) {
     const before = record.sessionIds.length

@@ -31,11 +31,16 @@ npm run dev         # 从源码直接运行 CLI / run the CLI from source
   new message keys must be added in both languages, constrained by the `MessageKey` type
 - 涉及删除路径的逻辑必须保持符号链接逃逸防护与备份目录校验 /
   deletion paths must keep the symlink escape guard and the backup dir validation
+- 会话目录名必须使用 `src/paths.ts` 的 `encodeSegment` 编码,不得用原始会话 id 拼接路径 /
+  session directory names must be encoded with `encodeSegment` from `src/paths.ts`; never join a raw session id into a path
+- 从 `workspace.json` 移除 id 的依据只能来自清理计划,即幽灵条目与本次删除成功两项的并集,不得重新扫盘推断 /
+  ids may only be removed from `workspace.json` based on the cleanup plan, the union of ghost entries and sessions actually removed; never by re-scanning the disk
 - 公开 API 与导出函数签名处需要文档注释 / exported signatures carry doc comments
 
 ## CI 与发布 / CI and release
 
-- GitHub Actions 在 ubuntu、windows、macOS × Node 22/24 上运行 typecheck、test、build。
+- GitHub Actions 在 ubuntu、windows、macOS 与 Node 22、24 组成的矩阵上运行 typecheck、test、build /
+  GitHub Actions runs typecheck, test and build on ubuntu, windows and macOS with Node 22 and 24。
 - 发布由 `prepublishOnly` 自动执行 typecheck + test + build 后打包 /
   publishing runs typecheck + test + build automatically via `prepublishOnly`。
 - 发布前必须升版本(`npm version patch|minor|major`),npm 不允许重新发布同一版本 /

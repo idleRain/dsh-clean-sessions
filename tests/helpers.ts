@@ -26,27 +26,50 @@ export function makeFixture(): Fixture {
 
 /** 写入 workspace.json,内容序列化为带换行结尾的格式化 JSON。 */
 export function writeWorkspaceState(dshHome: string, state: WorkspaceState): void {
-  writeFileSync(join(dshHome, 'storages', 'workspace.json'), `${JSON.stringify(state, null, 2)}\n`, 'utf8')
+  writeWorkspaceJson(dshHome, state)
+}
+
+/** 写入任意 workspace.json 内容,用于构造含未知字段的夹具。 */
+export function writeWorkspaceJson(dshHome: string, value: unknown): void {
+  writeFileSync(join(dshHome, 'storages', 'workspace.json'), `${JSON.stringify(value, null, 2)}\n`, 'utf8')
 }
 
 /** 读取 workspace.json 的当前内容。 */
 export function readWorkspaceFile(dshHome: string): WorkspaceState {
-  return JSON.parse(readFileSync(join(dshHome, 'storages', 'workspace.json'), 'utf8')) as WorkspaceState
+  return JSON.parse(readWorkspaceText(dshHome)) as WorkspaceState
 }
 
-/** 在指定项目分组下创建会话目录与日志文件,并把日志修改时间回拨到指定分钟数之前。 */
-export function makeSession(dshHome: string, project: string, id: string, ageMinutes: number, payload = 'data'): string {
-  const dir = join(dshHome, 'sessions', `--${project}--`, id)
+/** 读取 workspace.json 的原始 JSON,用于断言未知字段是否保真。 */
+export function readWorkspaceJson(dshHome: string): Record<string, unknown> {
+  return JSON.parse(readWorkspaceText(dshHome)) as Record<string, unknown>
+}
+
+/** 读取 workspace.json 的原始文本,用于字节级比较。 */
+export function readWorkspaceText(dshHome: string): string {
+  return readFileSync(join(dshHome, 'storages', 'workspace.json'), 'utf8')
+}
+
+/**
+ * 在指定项目分组下创建会话目录与 V4 日志文件,并把日志修改时间回拨到指定分钟数之前。
+ * 目录名与 id 解耦,以便构造 DSH 会编码目录名的场景。
+ */
+export function makeSessionDir(dshHome: string, project: string, dirName: string, ageMinutes: number, payload = 'data'): string {
+  const dir = join(dshHome, 'sessions', `--${project}--`, dirName)
   mkdirSync(dir, { recursive: true })
-  const file = join(dir, 'session.v3.jsonl.zstd')
+  const file = join(dir, 'session.v4.jsonl.zstd')
   writeFileSync(file, payload, 'utf8')
   const past = new Date(Date.now() - ageMinutes * 60_000)
   utimesSync(file, past, past)
   return dir
 }
 
-/** 在投影缓存遗留目录下创建指定会话的文档,模拟旧 per-record 布局的残留。 */
-export function makeLegacyCacheDoc(dshHome: string, id: string): void {
+/** 按会话 id 直接命名目录创建会话,适用于 id 本身就是合法目录名的场景。 */
+export function makeSession(dshHome: string, project: string, id: string, ageMinutes: number, payload = 'data'): string {
+  return makeSessionDir(dshHome, project, id, ageMinutes, payload)
+}
+
+/** 在投影缓存 per-record 目录下创建指定会话的文档。 */
+export function makeProjectionCacheDoc(dshHome: string, id: string): void {
   const dir = join(dshHome, 'storages', 'session_projcache', 'sessions')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, `${id}.json`), '{}', 'utf8')

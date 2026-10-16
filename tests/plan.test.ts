@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildPlan, collectGoneSessionIds } from '../src/plan.ts'
-import { makeFixture, makeSession } from './helpers.ts'
+import { makeFixture, makeSession, makeSessionDir } from './helpers.ts'
 
 describe('buildPlan', () => {
   test('旧会话进入待删除,最近写入被排除,缺失归为幽灵', () => {
@@ -63,15 +63,34 @@ describe('buildPlan', () => {
       fixture.cleanup()
     }
   })
+
+  test('id 含 ~ 时按 encodeSegment 编码定位而非判为幽灵', () => {
+    const fixture = makeFixture()
+    try {
+      makeSessionDir(fixture.dshHome, 'proj-a', 'sess~007E1', 120)
+      const plan = buildPlan(fixture.dshHome, ['sess~1'], 30, false)
+      assert.deepEqual(plan.toDelete.map(item => item.id), ['sess~1'])
+      assert.equal(plan.ghosts.length, 0)
+    } finally {
+      fixture.cleanup()
+    }
+  })
 })
 
 describe('collectGoneSessionIds', () => {
-  test('只返回磁盘上不存在的 id', () => {
+  test('只汇总幽灵条目与本次删除成功的会话,活跃排除与逃逸跳过不参与', () => {
     const fixture = makeFixture()
     try {
-      makeSession(fixture.dshHome, 'proj-a', 'session-a', 60)
-      const gone = collectGoneSessionIds(fixture.dshHome, ['session-a', 'session-b'])
-      assert.deepEqual([...gone], ['session-b'])
+      makeSession(fixture.dshHome, 'proj-a', 'session-old', 120)
+      makeSession(fixture.dshHome, 'proj-b', 'session-recent', 1)
+      const outside = join(fixture.root, 'outside')
+      mkdirSync(join(outside, 'session-escaped'), { recursive: true })
+      const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+      symlinkSync(outside, join(fixture.dshHome, 'sessions', '--link--'), linkType)
+      const archived = ['session-old', 'session-recent', 'session-ghost', 'session-escaped']
+      const plan = buildPlan(fixture.dshHome, archived, 30, false)
+      const gone = collectGoneSessionIds(plan, new Set(['session-old']))
+      assert.deepEqual([...gone].sort(), ['session-ghost', 'session-old'])
     } finally {
       fixture.cleanup()
     }

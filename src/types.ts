@@ -23,6 +23,8 @@ export interface CliOptions {
   backupDir?: string
   /** 是否同步 workspace.json 配置,默认同步。 */
   updateConfig: boolean
+  /** 会话根目录缺失或不可用时是否继续执行,默认终止。 */
+  allowMissingSessions: boolean
   /** DSH 主目录,默认来自 DSH_HOME 或用户主目录下的 .dsh。 */
   dshHome: string
   /** 是否只输出帮助文本。 */
@@ -64,6 +66,8 @@ export interface WorkspaceState {
     initialized: boolean
     workspaceIds: string[]
     archivedSessionIds?: string[]
+    pinnedSessionIds?: string[]
+    defaultWorkspaceId?: string
     pendingMutation?: unknown
   }
   tables: {

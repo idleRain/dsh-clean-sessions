@@ -49,12 +49,12 @@ export function buildPlan(
   return { toDelete, recentExcluded, ghosts, unsafe }
 }
 
-/** 收集归档名单中磁盘目录已不存在的 id,包含本次删除的会话与历史幽灵条目。 */
-export function collectGoneSessionIds(dshHome: string, archivedIds: readonly string[]): Set<string> {
-  const root = sessionsRoot(dshHome)
-  const goneIds = new Set<string>()
-  for (const id of archivedIds) {
-    if (findSessionDir(root, id) === undefined) goneIds.add(id)
-  }
+/**
+ * 汇总可以从配置中移除的 id:计划判定已不存在的条目,以及本次确实删除成功的会话。
+ * 最近活跃被排除与符号链接逃逸被跳过的 id 不参与,它们可能仍在磁盘上。
+ */
+export function collectGoneSessionIds(plan: CleanPlan, removedIds: Iterable<string>): Set<string> {
+  const goneIds = new Set(plan.ghosts.map(item => item.id))
+  for (const id of removedIds) goneIds.add(id)
   return goneIds
 }

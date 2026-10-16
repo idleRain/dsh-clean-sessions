@@ -4,14 +4,25 @@
  * @module dsh-clean-sessions
  */
 
-export { resolveDshHome, sessionsRoot, workspaceConfigPath, projectionCacheLegacyDir } from './paths.ts'
+export {
+  DSH_HOME_ENV,
+  encodeSegment,
+  expandHomePath,
+  normalizeDshHome,
+  projectionCacheDir,
+  resolveDshHome,
+  sessionsRoot,
+  workspaceConfigPath,
+} from './paths.ts'
 export { preflight, readWorkspaceState, updateWorkspaceConfig, validateWorkspaceState } from './config.ts'
 export { buildPlan, collectGoneSessionIds } from './plan.ts'
 export { applyClean } from './apply.ts'
 export { detectRunningDsh } from './detect.ts'
-export { formatBytes, findSessionDir, isPathInside, assertBackupDirOutsideHome } from './fsutils.ts'
+export { formatBytes, findSessionDir, inspectSessionsRoot, isPathInside, assertBackupDirOutsideHome } from './fsutils.ts'
 export { resolveLanguage, makeTranslator, translate } from './i18n.ts'
 export { ExitCode, UsageError, ConfigError, PreconditionError, LocalizedError } from './errors.ts'
+export type { PreflightOptions, PreflightResult } from './config.ts'
+export type { SessionsRootInspection, SessionsRootStatus } from './fsutils.ts'
 export type {
   ApplyOptions,
   ApplyOutcome,

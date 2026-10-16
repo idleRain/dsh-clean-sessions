@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import type { CleanPlan, CliOptions } from './types.ts'
 import { ExitCode, LocalizedError, UsageError, type ExitCodeValue } from './errors.ts'
 import { makeTranslator, resolveLanguage, type Translate } from './i18n.ts'
-import { resolveDshHome } from './paths.ts'
+import { normalizeDshHome, resolveDshHome } from './paths.ts'
 import { preflight, readWorkspaceState } from './config.ts'
 import { buildPlan } from './plan.ts'
 import { applyClean } from './apply.ts'
@@ -34,6 +34,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     includeRecent: false,
     backupDir: undefined,
     updateConfig: true,
+    allowMissingSessions: false,
     dshHome: resolveDshHome(),
     help: false,
     version: false,
@@ -58,6 +59,10 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         assertNoValue(flag, inlineValue)
         options.updateConfig = false
         break
+      case '--allow-missing-sessions':
+        assertNoValue(flag, inlineValue)
+        options.allowMissingSessions = true
+        break
       case '--help':
         assertNoValue(flag, inlineValue)
         options.help = true
@@ -73,7 +78,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         options.backupDir = parseNonEmptyValue(inlineValue ?? argv[++index], '--backup')
         break
       case '--home':
-        options.dshHome = parseNonEmptyValue(inlineValue ?? argv[++index], '--home')
+        options.dshHome = normalizeDshHome(parseNonEmptyValue(inlineValue ?? argv[++index], '--home'))
         break
       case '--lang': {
         const value = parseNonEmptyValue(inlineValue ?? argv[++index], '--lang')
@@ -190,12 +195,14 @@ async function confirm(promptText: string): Promise<boolean> {
 /** 执行清理流程:前置检查、读取名单、构建计划、预览或执行删除与配置同步。 */
 async function run(options: CliOptions, t: Translate): Promise<ExitCodeValue> {
   console.log(t('dshHome', { path: options.dshHome }))
-  const preflightResult = preflight(options.dshHome)
+  const preflightResult = preflight(options.dshHome, { allowMissingSessions: options.allowMissingSessions })
   if (options.backupDir !== undefined) {
     assertBackupDirOutsideHome(options.backupDir, options.dshHome)
   }
-  if (!preflightResult.sessionsRootExists) {
-    console.warn(yellow(t('sessionsRootMissing', { path: preflightResult.sessionsRootDir })))
+  if (preflightResult.sessionsRootStatus !== 'usable') {
+    // 根目录不可用时任何 id 都无法核实,既不能删除也不能从配置中摘除
+    console.warn(yellow(t('sessionsRootSkipped', { path: preflightResult.sessionsRootDir })))
+    return ExitCode.Ok
   }
   const state = readWorkspaceState(options.dshHome)
   const archivedIds = state.global.archivedSessionIds ?? []
@@ -221,7 +228,7 @@ async function run(options: CliOptions, t: Translate): Promise<ExitCodeValue> {
       return ExitCode.Ok
     }
   }
-  const outcome = applyClean(options.dshHome, archivedIds, plan, {
+  const outcome = applyClean(options.dshHome, plan, {
     backupDir: options.backupDir,
     updateConfig: options.updateConfig,
   })
