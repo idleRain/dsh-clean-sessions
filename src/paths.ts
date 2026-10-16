@@ -77,6 +77,16 @@ export function sessionsRoot(dshHome: string): string {
   return join(dshHome, 'sessions')
 }
 
+/** 返回内容寻址的附件对象存储根,叶子名为对象字节的 sha256 摘要。 */
+export function attachmentsObjectsDir(dshHome: string): string {
+  return join(dshHome, 'attachments', 'v1', 'objects')
+}
+
+/** 返回附件写入期的暂存目录,非空表示有正在进行的写入。 */
+export function attachmentsTmpDir(dshHome: string): string {
+  return join(dshHome, 'attachments', 'v1', 'tmp')
+}
+
 /** 返回归档名单所在的配置文件路径。 */
 export function workspaceConfigPath(dshHome: string): string {
   return join(dshHome, 'storages', 'workspace.json')

@@ -13,16 +13,20 @@ describe('parseArgs', () => {
     assert.equal(options.yes, false)
     assert.equal(options.minAgeMinutes, 30)
     assert.equal(options.includeRecent, false)
+    assert.equal(options.keepChildren, false)
+    assert.equal(options.keepAttachments, false)
     assert.equal(options.updateConfig, true)
     assert.equal(options.allowMissingSessions, false)
     assert.equal(options.lang, 'auto')
   })
 
   test('布尔参数逐一生效', () => {
-    const options = parseArgs(['--apply', '--yes', '--include-recent', '--no-config', '--allow-missing-sessions', '--help', '--version'])
+    const options = parseArgs(['--apply', '--yes', '--include-recent', '--keep-children', '--keep-attachments', '--no-config', '--allow-missing-sessions', '--help', '--version'])
     assert.equal(options.apply, true)
     assert.equal(options.yes, true)
     assert.equal(options.includeRecent, true)
+    assert.equal(options.keepChildren, true)
+    assert.equal(options.keepAttachments, true)
     assert.equal(options.updateConfig, false)
     assert.equal(options.allowMissingSessions, true)
     assert.equal(options.help, true)
@@ -52,6 +56,8 @@ describe('parseArgs', () => {
 
   test('布尔参数带内联值抛出参数错误', () => {
     assert.throws(() => parseArgs(['--apply=yes']), UsageError)
+    assert.throws(() => parseArgs(['--keep-children=1']), UsageError)
+    assert.throws(() => parseArgs(['--keep-attachments=1']), UsageError)
   })
 
   test('未知参数抛出参数错误', () => {

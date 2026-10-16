@@ -18,6 +18,8 @@ const zh = {
   --yes                跳过删除前的确认提示,仅配合 --apply 使用
   --min-age <分钟>      最近多少分钟内有写入的归档会话视为可能活跃,默认 30
   --include-recent     强制纳入最近有写入的归档会话,默认排除
+  --keep-children      只删除归档名单内的会话,不做血缘级联,子代理后代保留在磁盘上
+  --keep-attachments   跳过附件对象回收,只被待删会话引用的对象保留在磁盘上
   --backup <目录>       把会话目录移入备份目录而非直接删除,目录不能位于 DSH 主目录之内
   --no-config          只删除磁盘目录,不同步 workspace.json 配置
   --allow-missing-sessions
@@ -30,13 +32,33 @@ const zh = {
 安全说明:
   1. 默认仅预览,必须显式传入 --apply 才会修改任何文件。
   2. 若 dsh 正在运行,修改配置后必须重启 dsh,否则内存中的旧名单会被写回。
-  3. 附件存储与 session_projcache.json 单文件历史缓存不会被清理。
+  3. 仅回收只被待删会话引用的 attachments/v1/objects 对象,可加 --keep-attachments 关闭;
+     request-images 派生缓存与 session_projcache.json 单文件历史缓存不会被清理。
+  4. 默认按血缘级联删除待删会话衍生的子代理会话;fork 出来的会话是独立会话,不会受影响。
 `,
   dshHome: 'DSH 主目录: {path}',
   noArchived: '没有已归档的会话,无需处理。',
   toDeleteHeader: '待删除: {count} 个, 合计 {size}',
   planRow: '  {id}  {project}  {size}{recentMark}',
   recentMark: ' [最近有写入]',
+  cascadeHeader: '血缘级联纳入删除: {count} 个, 合计 {size}',
+  cascadeRow: '  {id}  {project}  {size}  来源: {source}',
+  cascadeHint: '级联项是待删会话衍生的子代理会话;基于待删会话 fork 出来的独立会话不受影响。',
+  cascadeRemovedSummary: '其中由血缘级联移除: {count} 个',
+  blockedHeader: '因血缘后代无法处理,以下 {count} 个归档会话本次保留:',
+  blockedRow: '  {id}  {project}  原因: {reason}',
+  blockedByRecentDescendant: '后代 {childId} 最近仍有写入',
+  blockedByUnsafeDescendant: '后代 {childId} 位于 sessions 根目录之外',
+  blockedHint: '删除这些祖先会让无法处理的子代理后代失去父会话;可加 --include-recent 纳入最近有写入的后代,或先人工检查并处理逃逸目录。',
+  lineageDiagnosticsHeader: '血缘诊断: {count} 条,以下会话的日志无法读取或缺少会话 id,其子代理关系无法确认:',
+  lineageDiagnosticsHint: '请检查对应会话目录的读取权限;诊断只影响血缘识别,不改变已在归档名单内会话的既有归类。',
+  keepChildrenHint: '已按 --keep-children 跳过血缘级联,子代理后代仍保留在磁盘上,DSH 界面不再提供触达入口。',
+  keepAttachmentsHint: '已按 --keep-attachments 跳过附件回收,attachments/v1/objects 保持不变。',
+  attachmentsPreview: '附件对象预计回收: {count} 个, {size}',
+  attachmentsPreviewDeferred: '附件回收将在 --apply 时重新校验并执行,本次未完成统计: {reason}',
+  attachmentsReclaimed: '已回收附件对象: {count} 个, {size}',
+  attachmentsSkipped: '已跳过附件回收: {detail}',
+  attachmentsRemovalFailed: '附件对象回收失败 {count} 项:',
   recentExcludedHeader: '以下 {count} 个归档会话在最近 {minutes} 分钟内有写入,视为可能活跃,本次不处理:',
   recentExcludedHint: '确认这些会话已结束运行时,可加 --include-recent 强制纳入,或调低 --min-age。',
   ghostsHeader: '幽灵条目,磁盘上已无目录,仅配置残留: {count} 个',
@@ -89,6 +111,10 @@ Options:
   --min-age <minutes>  Treat archived sessions written within this many minutes
                        as potentially active; default 30
   --include-recent     Force-include recently written archived sessions
+  --keep-children      Delete only the archived sessions and skip lineage
+                       cascading, leaving subagent descendants on disk
+  --keep-attachments   Skip attachment object reclamation, leaving objects that
+                       only the deleted sessions referenced on disk
   --backup <dir>       Move session directories into a backup dir instead of
                        deleting; must be outside the DSH home
   --no-config          Only remove on-disk directories, skip workspace.json sync
@@ -105,14 +131,36 @@ Safety notes:
   1. Preview only by default; pass --apply to change anything.
   2. If dsh is running, restart it after the config change, otherwise the
      in-memory archive list is written back and ghost entries reappear.
-  3. The attachment store and the legacy single-file session_projcache.json
+  3. Only attachments/v1/objects entries referenced solely by the deleted
+     sessions are reclaimed; pass --keep-attachments to skip that. The derived
+     request-images caches and the legacy single-file session_projcache.json
      cache are never touched.
+  4. Subagent sessions derived from a session slated for deletion are removed
+     with it; forked sessions are independent and stay untouched.
 `,
   dshHome: 'DSH home: {path}',
   noArchived: 'No archived sessions to process.',
   toDeleteHeader: 'To delete: {count} ({size})',
   planRow: '  {id}  {project}  {size}{recentMark}',
   recentMark: ' [recently written]',
+  cascadeHeader: 'Included by lineage cascade: {count} ({size})',
+  cascadeRow: '  {id}  {project}  {size}  from: {source}',
+  cascadeHint: 'Cascade entries are subagent sessions derived from a session slated for deletion; sessions forked from it are independent and stay untouched.',
+  cascadeRemovedSummary: 'Removed by lineage cascade: {count}',
+  blockedHeader: 'Kept because a lineage descendant cannot be handled, {count} archived session(s):',
+  blockedRow: '  {id}  {project}  reason: {reason}',
+  blockedByRecentDescendant: 'descendant {childId} was written recently',
+  blockedByUnsafeDescendant: 'descendant {childId} resolves outside the sessions root',
+  blockedHint: 'Deleting these ancestors would orphan subagent descendants that cannot be handled; pass --include-recent to include recently written descendants, or inspect and handle the escaping directories first.',
+  lineageDiagnosticsHeader: 'Lineage diagnostics: {count} entry/entries; the subagent relationship of these sessions cannot be confirmed because the log is unreadable or lacks a session id:',
+  lineageDiagnosticsHint: 'Check read access to these session directories; diagnostics only affect lineage detection and never change the existing verdict of an archived session.',
+  keepChildrenHint: 'Lineage cascading was skipped because --keep-children was given; subagent descendants stay on disk with no entry point left in the DSH interface.',
+  keepAttachmentsHint: 'Attachment reclamation was skipped because --keep-attachments was given; attachments/v1/objects is left unchanged.',
+  attachmentsPreview: 'Attachment objects expected to be reclaimed: {count} ({size})',
+  attachmentsPreviewDeferred: 'Attachment reclamation is verified and executed again under --apply; this preview could not finish the count: {reason}',
+  attachmentsReclaimed: 'Reclaimed attachment objects: {count} ({size})',
+  attachmentsSkipped: 'Attachment reclamation skipped: {detail}',
+  attachmentsRemovalFailed: 'Failed to reclaim {count} attachment object(s):',
   recentExcludedHeader: 'These {count} archived sessions were written within the last {minutes} minutes and are treated as potentially active; skipped:',
   recentExcludedHint: 'If you confirm they have finished, pass --include-recent or lower --min-age.',
   ghostsHeader: 'Ghost entries, no on-disk directory, config-only residue: {count}',

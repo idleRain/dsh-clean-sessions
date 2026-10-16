@@ -6,12 +6,17 @@ import { dirname, join } from 'node:path'
 import { applyClean } from '../src/apply.ts'
 import { buildPlan } from '../src/plan.ts'
 import {
+  attachmentObjectPath,
   baseWorkspaceState,
   canSimulateUnreadableDir,
+  makeAttachmentObject,
+  makeDigest,
   makeFixture,
   makeProjectionCacheDoc,
+  makeReferenceLog,
   makeSession,
   makeSessionDir,
+  makeZstdSession,
   readWorkspaceFile,
   readWorkspaceJson,
   readWorkspaceText,
@@ -316,6 +321,262 @@ describe('CLI 端到端', () => {
       assert.equal(result.status, 0)
       const projects = readdirSync(join(fixture.dshHome, 'sessions'))
       assert.deepEqual(projects, [])
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('预览分别列出级联后代与被阻止的祖先', () => {
+    const fixture = makeFixture()
+    try {
+      makeZstdSession(fixture.dshHome, 'proj-a', 'session-parent', { id: 'session-parent' }, 120)
+      makeZstdSession(
+        fixture.dshHome,
+        'proj-a',
+        'session-child',
+        { id: 'session-child', parentSession: 'session-parent', origin: 'subagent' },
+        120,
+      )
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-parent'], ['session-parent']))
+      const result = runCli(['--lang', 'zh'], fixture.dshHome)
+      assert.equal(result.status, 0)
+      assert.match(result.stdout, /血缘级联纳入删除: 1 个/)
+      assert.match(result.stdout, /session-child .* 来源: session-parent/)
+      assert.equal(result.stdout.includes('因血缘后代无法处理'), false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('--keep-children 只删除归档名单内的会话,子代理后代保留', () => {
+    const fixture = makeFixture()
+    try {
+      makeZstdSession(fixture.dshHome, 'proj-a', 'session-parent', { id: 'session-parent' }, 120)
+      makeZstdSession(
+        fixture.dshHome,
+        'proj-a',
+        'session-child',
+        { id: 'session-child', parentSession: 'session-parent', origin: 'subagent' },
+        120,
+      )
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-parent'], ['session-parent']))
+      const result = runCli(['--apply', '--yes', '--keep-children', '--lang', 'zh'], fixture.dshHome)
+      assert.equal(result.status, 0)
+      assert.match(result.stdout, /已按 --keep-children 跳过血缘级联/)
+      assert.match(result.stdout, /其中由血缘级联移除: 0 个/)
+      assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-parent')), false)
+      assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-child')), true)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('级联删除的子代理 id 同步从工作区槽位、归档名单与置顶集合清理', () => {
+    const fixture = makeFixture()
+    try {
+      makeZstdSession(fixture.dshHome, 'proj-a', 'session-parent', { id: 'session-parent' }, 120)
+      makeZstdSession(
+        fixture.dshHome,
+        'proj-a',
+        'session-child',
+        { id: 'session-child', parentSession: 'session-parent', origin: 'subagent' },
+        120,
+      )
+      makeSession(fixture.dshHome, 'proj-a', 'session-live', 120)
+      const state = baseWorkspaceState(['session-parent'], ['session-parent', 'session-child', 'session-live'])
+      state.global.pinnedSessionIds = ['session-child', 'session-live']
+      writeWorkspaceJson(fixture.dshHome, state)
+      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      assert.equal(result.status, 0)
+      assert.match(result.stdout, /其中由血缘级联移除: 1 个/)
+      assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-child')), false)
+      const written = readWorkspaceFile(fixture.dshHome)
+      assert.deepEqual(written.global.archivedSessionIds, [])
+      assert.deepEqual(written.global.pinnedSessionIds, ['session-live'])
+      assert.deepEqual(written.tables.workspaces['ws-a']!.sessionIds, ['session-live'])
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('级联删除后二次执行无任何动作,幂等', () => {
+    const fixture = makeFixture()
+    try {
+      makeZstdSession(fixture.dshHome, 'proj-a', 'session-parent', { id: 'session-parent' }, 120)
+      makeZstdSession(
+        fixture.dshHome,
+        'proj-a',
+        'session-child',
+        { id: 'session-child', parentSession: 'session-parent', origin: 'subagent' },
+        120,
+      )
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-parent'], ['session-parent']))
+      const first = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      assert.equal(first.status, 0)
+      assert.match(first.stdout, /已移除会话目录: 2 个/)
+      assert.match(first.stdout, /其中由血缘级联移除: 1 个/)
+      const second = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      assert.equal(second.status, 0)
+      assert.match(second.stdout, /没有已归档的会话/)
+      assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-child')), false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('后代最近有写入时祖先被阻止,预览给出可操作原因且不删除', () => {
+    const fixture = makeFixture()
+    try {
+      makeZstdSession(fixture.dshHome, 'proj-a', 'session-parent', { id: 'session-parent' }, 120)
+      makeZstdSession(
+        fixture.dshHome,
+        'proj-a',
+        'session-child',
+        { id: 'session-child', parentSession: 'session-parent', origin: 'subagent' },
+        1,
+      )
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-parent'], ['session-parent']))
+      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      assert.equal(result.status, 0)
+      assert.match(result.stdout, /因血缘后代无法处理,以下 1 个归档会话本次保留/)
+      assert.match(result.stdout, /原因: 后代 session-child 最近仍有写入/)
+      assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-parent')), true)
+      assert.deepEqual(readWorkspaceFile(fixture.dshHome).global.archivedSessionIds, ['session-parent'])
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('血缘诊断列出日志不可读的会话数', () => {
+    const fixture = makeFixture()
+    try {
+      makeSession(fixture.dshHome, 'proj-a', 'session-old-1', 120)
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1']))
+      const result = runCli(['--lang', 'zh'], fixture.dshHome)
+      assert.equal(result.status, 0)
+      assert.match(result.stdout, /血缘诊断: 1 条/)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('预览显示预计回收的附件对象数与字节数', () => {
+    const fixture = makeFixture()
+    try {
+      const digest = makeDigest('a')
+      makeReferenceLog(fixture.dshHome, 'proj-a', 'session-old-1', 'session.v4.jsonl.zstd', [digest])
+      makeReferenceLog(fixture.dshHome, 'proj-a', 'session-live', 'session.v4.jsonl.zstd', [])
+      makeAttachmentObject(fixture.dshHome, digest, 2048)
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1'], ['session-old-1', 'session-live']))
+      const result = runCli(['--lang', 'zh'], fixture.dshHome)
+      assert.equal(result.status, 0)
+      assert.match(result.stdout, /附件对象预计回收: 1 个, 2\.0 KB/)
+      assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, digest)), true)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('--apply 回收只被待删会话引用的附件对象并汇总', () => {
+    const fixture = makeFixture()
+    try {
+      const deletedOnly = makeDigest('b')
+      const shared = makeDigest('c')
+      makeReferenceLog(fixture.dshHome, 'proj-a', 'session-old-1', 'session.v4.jsonl.zstd', [deletedOnly, shared])
+      makeReferenceLog(fixture.dshHome, 'proj-a', 'session-live', 'session.v4.jsonl.zstd', [shared])
+      makeAttachmentObject(fixture.dshHome, deletedOnly, 16)
+      makeAttachmentObject(fixture.dshHome, shared, 16)
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1'], ['session-old-1', 'session-live']))
+      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      assert.equal(result.status, 0)
+      assert.match(result.stdout, /已回收附件对象: 1 个, 16 B/)
+      assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, deletedOnly)), false)
+      assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, shared)), true)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('--keep-attachments 保留附件对象且会话目录照常删除', () => {
+    const fixture = makeFixture()
+    try {
+      const digest = makeDigest('d')
+      makeReferenceLog(fixture.dshHome, 'proj-a', 'session-old-1', 'session.v4.jsonl.zstd', [digest])
+      makeAttachmentObject(fixture.dshHome, digest, 16)
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1']))
+      const result = runCli(['--apply', '--yes', '--keep-attachments', '--lang', 'zh'], fixture.dshHome)
+      assert.equal(result.status, 0)
+      assert.match(result.stdout, /已按 --keep-attachments 跳过附件回收/)
+      assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, digest)), true)
+      assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-old-1')), false)
+      assert.deepEqual(readWorkspaceFile(fixture.dshHome).global.archivedSessionIds, [])
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('--backup 把附件对象移入备份目录而非删除', () => {
+    const fixture = makeFixture()
+    try {
+      const digest = makeDigest('e')
+      makeReferenceLog(fixture.dshHome, 'proj-a', 'session-old-1', 'session.v4.jsonl.zstd', [digest])
+      makeAttachmentObject(fixture.dshHome, digest, 16)
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1']))
+      const backupDir = join(fixture.root, 'backup')
+      const result = runCli(['--apply', '--yes', '--lang', 'zh', '--backup', backupDir], fixture.dshHome)
+      assert.equal(result.status, 0)
+      assert.match(result.stdout, /已回收附件对象: 1 个/)
+      assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, digest)), false)
+      assert.equal(existsSync(join(backupDir, 'attachments', 'objects', 'ee', digest)), true)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('存活会话日志不可读时跳过回收,会话删除与配置同步不受影响', () => {
+    const fixture = makeFixture()
+    try {
+      const digest = makeDigest('f')
+      makeReferenceLog(fixture.dshHome, 'proj-a', 'session-old-1', 'session.v4.jsonl.zstd', [digest])
+      makeSession(fixture.dshHome, 'proj-a', 'session-live', 120, 'not a zstd container')
+      makeAttachmentObject(fixture.dshHome, digest, 16)
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1'], ['session-old-1', 'session-live']))
+      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      assert.equal(result.status, 0)
+      assert.match(result.stderr, /已跳过附件回收/)
+      assert.match(result.stdout, /已移除会话目录: 1 个/)
+      assert.match(result.stdout, /配置同步完成/)
+      assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, digest)), true)
+      assert.deepEqual(readWorkspaceFile(fixture.dshHome).tables.workspaces['ws-a']!.sessionIds, ['session-live'])
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('血缘级联删除的后代引用对象同样被回收', () => {
+    const fixture = makeFixture()
+    try {
+      const parentOnly = makeDigest('1')
+      const childOnly = makeDigest('2')
+      makeZstdSession(fixture.dshHome, 'proj-a', 'session-parent', { id: 'session-parent' }, 120, [
+        JSON.stringify({ type: 'user/message', attachment: `sha256:${parentOnly}` }),
+      ])
+      makeZstdSession(
+        fixture.dshHome,
+        'proj-a',
+        'session-child',
+        { id: 'session-child', parentSession: 'session-parent', origin: 'subagent' },
+        120,
+        [JSON.stringify({ type: 'user/message', attachment: `sha256:${childOnly}` })],
+      )
+      makeAttachmentObject(fixture.dshHome, parentOnly, 16)
+      makeAttachmentObject(fixture.dshHome, childOnly, 16)
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-parent'], ['session-parent']))
+      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      assert.equal(result.status, 0)
+      assert.match(result.stdout, /已回收附件对象: 2 个, 32 B/)
+      assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, parentOnly)), false)
+      assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, childOnly)), false)
     } finally {
       fixture.cleanup()
     }

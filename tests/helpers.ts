@@ -5,7 +5,8 @@
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { zstdCompressSync } from 'node:zlib'
 import type { WorkspaceState } from '../src/types.ts'
 
 /** 一次测试使用的隔离环境,包含可写的主目录路径与清理回调。 */
@@ -68,6 +69,55 @@ export function makeSession(dshHome: string, project: string, id: string, ageMin
   return makeSessionDir(dshHome, project, id, ageMinutes, payload)
 }
 
+/** 会话头行的最小构造参数,与 DSH 写入日志的首行字段一致,id 缺省用于构造异常头行。 */
+export interface SessionHeaderFixture {
+  id?: string
+  parentSession?: string
+  origin?: string
+}
+
+/** 把若干条记录逐条压缩成 zstd 帧并拼接,复刻 DSH 一条记录一帧的容器格式。 */
+export function encodeZstdFrames(records: readonly string[]): Buffer {
+  return Buffer.concat(records.map(record => zstdCompressSync(Buffer.from(record, 'utf8'))))
+}
+
+/**
+ * 在会话目录下写入指定文件名的日志,并把修改时间回拨到指定分钟数之前。
+ * 文件名由调用方给出,以便构造多代并存、明文日志与日志缺失等场景。
+ */
+export function makeSessionLog(
+  dshHome: string,
+  project: string,
+  dirName: string,
+  fileName: string,
+  content: string | Buffer,
+  ageMinutes: number,
+): string {
+  const dir = join(dshHome, 'sessions', `--${project}--`, dirName)
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, fileName)
+  writeFileSync(file, content)
+  const past = new Date(Date.now() - ageMinutes * 60_000)
+  utimesSync(file, past, past)
+  return dir
+}
+
+/**
+ * 用真实 zstd 逐帧拼接写出会话日志,头行取最高代命名 session.v4.jsonl.zstd。
+ * 追加记录会成为后续帧,用于验证只解第 1 帧的读取方式不受后续记录影响。
+ */
+export function makeZstdSession(
+  dshHome: string,
+  project: string,
+  dirName: string,
+  header: SessionHeaderFixture,
+  ageMinutes: number,
+  extraRecords: readonly string[] = [],
+): string {
+  const records = [JSON.stringify({ type: 'session', ...header }), ...extraRecords]
+  return makeSessionLog(dshHome, project, dirName, 'session.v4.jsonl.zstd', encodeZstdFrames(records), ageMinutes)
+}
+
 /** 在投影缓存 per-record 目录下创建指定会话的文档。 */
 export function makeProjectionCacheDoc(dshHome: string, id: string): void {
   const dir = join(dshHome, 'storages', 'session_projcache', 'sessions')
@@ -98,4 +148,64 @@ export function baseWorkspaceState(archivedIds: string[], sessionIds?: string[])
 export function canSimulateUnreadableDir(): boolean {
   if (process.platform === 'win32') return false
   return !(typeof process.getuid === 'function' && process.getuid() === 0)
+}
+
+/** 构造一个由单个十六进制字符重复而成的 64 位摘要,便于在测试中区分对象。 */
+export function makeDigest(hexChar: string): string {
+  return hexChar.repeat(64)
+}
+
+/** 返回内容寻址对象在附件存储中的路径。 */
+export function attachmentObjectPath(dshHome: string, digest: string): string {
+  return join(dshHome, 'attachments', 'v1', 'objects', digest.slice(0, 2), digest)
+}
+
+/** 在附件对象存储下写入一个对象文件,返回其路径。 */
+export function makeAttachmentObject(dshHome: string, digest: string, sizeBytes = 16): string {
+  const file = attachmentObjectPath(dshHome, digest)
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, Buffer.alloc(sizeBytes, 7))
+  return file
+}
+
+/** 在附件暂存目录下写入一个条目,用于模拟正在进行的写入。 */
+export function makeAttachmentTmpEntry(dshHome: string, name = 'pending'): string {
+  const file = join(dshHome, 'attachments', 'v1', 'tmp', name)
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, 'partial', 'utf8')
+  return file
+}
+
+/**
+ * 写入一份逐帧压缩的会话日志,记录的文本里以字面形式携带给定摘要。
+ * 目录名同时作为会话 id 写入头记录,便于按目录名归属引用。
+ */
+export function makeReferenceLog(
+  dshHome: string,
+  project: string,
+  dirName: string,
+  fileName: string,
+  digests: readonly string[],
+  ageMinutes = 120,
+): string {
+  const records = [
+    JSON.stringify({ type: 'session', id: dirName }),
+    ...digests.map(digest => JSON.stringify({ type: 'user/message', attachment: `sha256:${digest}` })),
+  ]
+  return makeSessionLog(dshHome, project, dirName, fileName, encodeZstdFrames(records), ageMinutes)
+}
+
+/** 写入一份未压缩的会话日志,每行一条携带摘要字面引用的记录。 */
+export function makePlainReferenceLog(
+  dshHome: string,
+  project: string,
+  dirName: string,
+  digests: readonly string[],
+  ageMinutes = 120,
+): string {
+  const lines = [
+    JSON.stringify({ type: 'session', id: dirName }),
+    ...digests.map(digest => JSON.stringify({ type: 'tool/result', attachment: `sha256:${digest}` })),
+  ]
+  return makeSessionLog(dshHome, project, dirName, 'session.v4.jsonl', `${lines.join('\n')}\n`, ageMinutes)
 }

@@ -75,6 +75,33 @@ describe('buildPlan', () => {
       fixture.cleanup()
     }
   })
+
+  test('没有待删会话时不做血缘扫描,级联与诊断均为空', () => {
+    const fixture = makeFixture()
+    try {
+      makeSession(fixture.dshHome, 'proj-a', 'session-unreadable', 120)
+      const plan = buildPlan(fixture.dshHome, [], 30, false)
+      assert.deepEqual(plan.toDelete, [])
+      assert.deepEqual(plan.cascade, [])
+      assert.deepEqual(plan.blocked, [])
+      assert.deepEqual(plan.lineageWarnings, [])
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('没有后代时级联与被阻止集合为空', () => {
+    const fixture = makeFixture()
+    try {
+      makeSession(fixture.dshHome, 'proj-a', 'session-old', 120)
+      const plan = buildPlan(fixture.dshHome, ['session-old'], 30, false)
+      assert.deepEqual(plan.toDelete.map(item => item.id), ['session-old'])
+      assert.deepEqual(plan.cascade, [])
+      assert.deepEqual(plan.blocked, [])
+    } finally {
+      fixture.cleanup()
+    }
+  })
 })
 
 describe('collectGoneSessionIds', () => {
