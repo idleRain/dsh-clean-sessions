@@ -7,6 +7,7 @@
 import { closeSync, openSync, readSync, readdirSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
+import { advanceOneFrame } from './zstdFrames.ts'
 
 /** 会话头中与子代理关系相关的字段,扁平头与 meta 嵌套两种形态归一后的结果。 */
 export interface SessionHeader {
@@ -42,9 +43,6 @@ const HEADER_PREFIX_INITIAL_BYTES = 4096
 
 /** 头行前缀的读取上限,达到上限仍无法解出则判定日志异常,避免继续放大内存占用。 */
 const HEADER_PREFIX_MAX_BYTES = 64 * 1024
-
-/** 前缀落在 zstd 帧中途时 node:zlib 返回的错误码,可据此加长前缀重试。 */
-const ZSTD_TRUNCATED_ERROR_CODE = 'Z_BUF_ERROR'
 
 /** 换行符码元,用于在明文前缀中定位首行边界。 */
 const NEWLINE_CODE = 0x0a
@@ -194,25 +192,29 @@ function readFirstLine(handle: number): { line: string } | { failure: string } {
   return { failure: `header line exceeds ${HEADER_PREFIX_MAX_BYTES} bytes` }
 }
 
-/** 读取压缩日志第 1 帧的首行,前缀落在帧中途时加长前缀重试。 */
+/**
+ * 读取压缩日志第 1 帧的首行,前缀落在帧中途时加长前缀重试。
+ * 帧是否完整只由帧结构判定:node:zlib 不保证对截断帧抛错,Node 22 与 24 都会静默返回空明文,
+ * 按解压错误码推断"前缀不足"会把只读进半帧的情况当成已完整读出,随后在明文解析处误报。
+ */
 function readFirstFrameLine(handle: number): { line: string } | { failure: string } {
   for (let size = HEADER_PREFIX_INITIAL_BYTES; size <= HEADER_PREFIX_MAX_BYTES; size *= 2) {
     const chunk = readPrefix(handle, size)
+    const advance = advanceOneFrame(chunk.data, 0)
+    if (advance.kind === 'invalid') {
+      return { failure: `cannot decode first zstd frame: ${advance.reason}` }
+    }
+    if (advance.kind === 'torn') {
+      if (!chunk.exhausted) continue
+      return { failure: 'cannot decode first zstd frame: truncated first zstd frame' }
+    }
     try {
-      return firstLineOf(zstdDecompressSync(chunk.data))
+      return firstLineOf(zstdDecompressSync(chunk.data.subarray(0, advance.end)))
     } catch (error) {
-      if (!isTruncatedFrameError(error, chunk)) {
-        return { failure: `cannot decode first zstd frame: ${describeError(error)}` }
-      }
+      return { failure: `cannot decode first zstd frame: ${describeError(error)}` }
     }
   }
   return { failure: `first zstd frame exceeds ${HEADER_PREFIX_MAX_BYTES} bytes` }
-}
-
-/** 判断解压失败是否属于"前缀不足",仅在文件尚未读完时可加长前缀重试。 */
-function isTruncatedFrameError(error: unknown, chunk: PrefixChunk): boolean {
-  const code = (error as NodeJS.ErrnoException).code
-  return code === ZSTD_TRUNCATED_ERROR_CODE && !chunk.exhausted
 }
 
 /** 单次遍历全部项目分组,构建"父会话 id 到子代理子会话 id"的索引。 */
