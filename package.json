@@ -1,6 +1,6 @@
 {
   "name": "dsh-clean-sessions",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Clean up archived DSH (DeepSeek Harness) sessions: remove session log directories and sync the archive list safely.",
   "author": "idleRain",
   "license": "MIT",
