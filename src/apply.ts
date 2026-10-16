@@ -52,14 +52,14 @@ export function applyClean(dshHome: string, plan: CleanPlan, options: ApplyOptio
   const cascadeIds = new Set(plan.cascade.map(item => item.id))
   const cascadeRemovedCount = [...removedIds].filter(id => cascadeIds.has(id)).length
   const goneIds = collectGoneSessionIds(plan, removedIds)
-  const cleanedCacheCount = cleanProjectionCache(projectionCacheDir(dshHome), goneIds)
+  const cacheResult = cleanProjectionCache(projectionCacheDir(dshHome), goneIds)
   const emptiedProjects = removeEmptyProjectDirs(sessionsRoot(dshHome))
   const { configResult, configError } = syncConfigQuietly(dshHome, options.updateConfig, goneIds)
   return {
     removedCount: removedIds.size,
     cascadeRemovedCount,
-    failures,
-    cleanedCacheCount,
+    failures: [...failures, ...cacheResult.failures],
+    cleanedCacheCount: cacheResult.cleanedCount,
     emptiedProjects,
     configResult,
     configError,

@@ -72,6 +72,30 @@ describe('applyClean', () => {
     }
   })
 
+  test('投影缓存文档删除失败时记入失败项且仍完成配置同步', () => {
+    const fixture = makeFixture()
+    try {
+      makeSession(fixture.dshHome, 'proj-a', 'session-old-1', 120)
+      makeProjectionCacheDoc(fixture.dshHome, 'session-old-1')
+      // 用同名目录占位,让删除抛出非瞬时错误,以便在真实文件系统上模拟单项失败
+      mkdirSync(
+        join(fixture.dshHome, 'storages', 'session_projcache', 'sessions', 'session-ghost.json'),
+        { recursive: true },
+      )
+      const archived = ['session-old-1', 'session-ghost']
+      writeWorkspaceState(fixture.dshHome, baseWorkspaceState(archived))
+      const plan = buildPlan(fixture.dshHome, archived, 30, false)
+      const outcome = applyClean(fixture.dshHome, plan, { updateConfig: true })
+      assert.equal(outcome.cleanedCacheCount, 1)
+      assert.equal(outcome.failures.length, 1)
+      assert.match(outcome.failures[0] ?? '', /session-ghost/)
+      // 关键:单项缓存失败不得阻止配置同步
+      assert.deepEqual(readWorkspaceFile(fixture.dshHome).global.archivedSessionIds, [])
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
   test('backup 模式把目录移入备份位置并同步配置', () => {
     const fixture = makeFixture()
     try {

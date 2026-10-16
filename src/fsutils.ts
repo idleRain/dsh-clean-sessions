@@ -202,15 +202,16 @@ function sleepSync(millis: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, millis)
 }
 
-/** 递归删除目录,对瞬时占用错误做有限次重试,最终失败时抛出最后一个错误。 */
-export function removeDirWithRetry(dir: string): void {
-  let lastError: unknown
+/**
+ * 执行一次删除动作,对瞬时占用错误做有限次重试。
+ * 非瞬时错误与重试耗尽都会抛出,由调用方决定记录后继续还是中断流程。
+ */
+function removeWithRetry(action: () => void): void {
   for (let attempt = 1; attempt <= DELETE_RETRY_COUNT; attempt++) {
     try {
-      rmSync(dir, { recursive: true, force: true })
+      action()
       return
     } catch (error) {
-      lastError = error
       const code = (error as NodeJS.ErrnoException).code
       if (code === undefined || !TRANSIENT_LOCK_CODES.has(code) || attempt === DELETE_RETRY_COUNT) {
         throw error
@@ -218,7 +219,11 @@ export function removeDirWithRetry(dir: string): void {
       sleepSync(DELETE_RETRY_DELAY_MILLIS)
     }
   }
-  throw lastError
+}
+
+/** 递归删除目录,对瞬时占用错误做有限次重试,最终失败时抛出最后一个错误。 */
+export function removeDirWithRetry(dir: string): void {
+  removeWithRetry(() => rmSync(dir, { recursive: true, force: true }))
 }
 
 /** 删除或移动一个会话目录;移动时先尝试 rename,跨卷失败则复制后删除原目录。 */
@@ -239,17 +244,33 @@ export function removeSessionDir(item: SessionPlan, backupDir: string | undefine
   }
 }
 
-/** 删除投影缓存中与指定 id 对应的 per-record 文档,返回清理数量。 */
-export function cleanProjectionCache(projectionCacheDir: string, removedIds: ReadonlySet<string>): number {
+/** 投影缓存文档的清理结果,失败项以列表返回供调用方汇总。 */
+export interface ProjectionCacheCleanResult {
+  cleanedCount: number
+  failures: string[]
+}
+
+/**
+ * 删除投影缓存中与指定 id 对应的 per-record 文档。
+ * 单项删除失败记入 failures 而不抛出,避免中断其后的配置同步。
+ */
+export function cleanProjectionCache(
+  projectionCacheDir: string,
+  removedIds: ReadonlySet<string>,
+): ProjectionCacheCleanResult {
   let cleanedCount = 0
+  const failures: string[] = []
   for (const id of removedIds) {
     const documentPath = join(projectionCacheDir, `${id}.json`)
-    if (existsSync(documentPath)) {
-      rmSync(documentPath, { force: true })
+    if (!existsSync(documentPath)) continue
+    try {
+      removeWithRetry(() => rmSync(documentPath, { force: true }))
       cleanedCount += 1
+    } catch (error) {
+      failures.push(`projection cache ${id}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  return cleanedCount
+  return { cleanedCount, failures }
 }
 
 /** 移除 sessions 根目录下已经完全为空的项目分组,返回被移除的分组名。 */
