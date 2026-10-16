@@ -35,8 +35,8 @@ npm run dev         # 从源码直接运行 CLI / run the CLI from source
   session directory names must be encoded with `encodeSegment` from `src/paths.ts`; never join a raw session id into a path
 - 从 `workspace.json` 移除 id 的依据只能来自清理计划,即幽灵条目与本次删除成功两项的并集,不得重新扫盘推断 /
   ids may only be removed from `workspace.json` based on the cleanup plan, the union of ghost entries and sessions actually removed; never by re-scanning the disk
-- 级联只沿 `origin === 'subagent'` 的血缘展开,fork 出来的独立会话及其后代不得删除 /
-  cascading may only follow `origin === 'subagent'` lineage; sessions forked from a removed session and their descendants must never be deleted
+- 级联只沿 `origin === 'subagent'` 的子代理关系展开,fork 出来的独立会话及其后代不得删除 /
+  cascading may only follow `origin === 'subagent'` subagent relations; sessions forked from a removed session and their descendants must never be deleted
 - 附件回收在任一会话日志无法完整读取时必须整体放弃,不得做部分删除 /
   attachment reclamation must abort entirely when any session log cannot be read in full; never remove a subset
 - 附件对象存储是内容寻址的,删除只能按摘要名进行,不得按内容推断 /

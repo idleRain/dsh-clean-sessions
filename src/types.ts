@@ -15,13 +15,11 @@ export type LanguageChoice = Language | 'auto'
 export interface CliOptions {
   /** 是否真正执行删除与配置更新,默认仅预览。 */
   apply: boolean
-  /** 是否跳过删除前的确认提示,仅配合 apply 使用。 */
-  yes: boolean
   /** 最近多少分钟内有写入的归档会话视为可能活跃,0 表示不启用守卫。 */
   minAgeMinutes: number
   /** 是否强制纳入最近有写入的归档会话,默认排除。 */
   includeRecent: boolean
-  /** 是否只删除归档名单内的会话,默认继续按血缘级联删除子代理后代。 */
+  /** 是否只删除归档名单内的会话,默认继续级联删除子代理后代。 */
   keepChildren: boolean
   /** 是否跳过附件对象回收,默认回收只被待删会话引用的对象。 */
   keepAttachments: boolean
@@ -63,11 +61,11 @@ export interface SessionPlan {
   state: 'exists' | 'ghost'
   /** 后代由级联纳入删除时记录其直接父会话 id,用于在预览中标注来源。 */
   cascadeSource?: string
-  /** 被血缘后代阻止删除时的原因,仅 blocked 项携带。 */
+  /** 被子代理后代阻止删除时的原因,仅 blocked 项携带。 */
   blockedReason?: BlockedReason
 }
 
-/** 全部归档会话的清理计划,按磁盘状态、活跃度与血缘处置归类。 */
+/** 全部归档会话的清理计划,按磁盘状态、活跃度与子代理关系处置归类。 */
 export interface CleanPlan {
   toDelete: SessionPlan[]
   /** 待删会话衍生的子代理后代,随其父会话一并删除。 */
@@ -77,8 +75,8 @@ export interface CleanPlan {
   recentExcluded: SessionPlan[]
   ghosts: SessionPlan[]
   unsafe: SessionPlan[]
-  /** 血缘扫描的诊断信息,例如日志不可读导致父子关系无法确认。 */
-  lineageWarnings: string[]
+  /** 子代理关系扫描的诊断信息,例如日志不可读导致父子关系无法确认。 */
+  cascadeWarnings: string[]
 }
 
 /** workspace.json 的持久化结构,字段与 workspace 域 schema 保持一致。 */
@@ -132,7 +130,7 @@ export interface AttachmentReclaimOutcome {
 /** applyClean 的执行结果,失败项以列表形式返回而非中断整体流程。 */
 export interface ApplyOutcome {
   removedCount: number
-  /** 其中由血缘级联纳入并成功移除的数量。 */
+  /** 其中由子代理级联纳入并成功移除的数量。 */
   cascadeRemovedCount: number
   failures: string[]
   cleanedCacheCount: number

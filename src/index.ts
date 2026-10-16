@@ -26,7 +26,7 @@ export {
   invertChildIndex,
   normalizeSessionHeader,
   readSessionLogHeader,
-} from './lineage.ts'
+} from './cascade.ts'
 export {
   ZSTD_LOG_SUFFIX,
   collectLogDigests,
@@ -42,7 +42,7 @@ export { formatBytes, findSessionDir, inspectSessionsRoot, isPathInside, assertB
 export { resolveLanguage, makeTranslator, translate } from './i18n.ts'
 export { ExitCode, UsageError, ConfigError, PreconditionError, LocalizedError } from './errors.ts'
 export type { PreflightOptions, PreflightResult } from './config.ts'
-export type { ChildIndexResult, HeaderReadResult, SessionHeader } from './lineage.ts'
+export type { ChildIndexResult, HeaderReadResult, SessionHeader } from './cascade.ts'
 export type {
   AttachmentObjectMeasure,
   AttachmentRemovalOptions,

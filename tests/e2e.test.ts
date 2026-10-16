@@ -27,12 +27,12 @@ import {
 /** 项目根目录,用于以子进程方式运行源码 CLI。 */
 const projectRoot = dirname(import.meta.dirname)
 
-/** 运行源码 CLI 并返回退出码与输出。 */
-function runCli(args: string[], fixtureHome: string): { status: number | null; stdout: string; stderr: string } {
+/** 运行源码 CLI 并返回退出码与输出,stdin 输入用于驱动删除前的确认提示。 */
+function runCli(args: string[], fixtureHome: string, input = ''): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync(process.execPath, ['src/cli.ts', '--home', fixtureHome, ...args], {
     cwd: projectRoot,
     encoding: 'utf8',
-    input: '',
+    input,
   })
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
@@ -217,12 +217,12 @@ describe('CLI 端到端', () => {
     }
   })
 
-  test('--apply --yes 删除会话并同步配置', () => {
+  test('--apply 在收到确认输入时删除会话并同步配置', () => {
     const fixture = makeFixture()
     try {
       makeSession(fixture.dshHome, 'proj-a', 'session-old-1', 120)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1']))
-      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
       assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-old-1')), false)
       assert.deepEqual(readWorkspaceFile(fixture.dshHome).global.archivedSessionIds, [])
@@ -236,7 +236,7 @@ describe('CLI 端到端', () => {
     try {
       makeSessionDir(fixture.dshHome, 'proj-a', 'sess~007E1', 120)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['sess~1'], ['sess~1']))
-      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
       assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'sess~007E1')), false)
       assert.deepEqual(readWorkspaceFile(fixture.dshHome).global.archivedSessionIds, [])
@@ -245,12 +245,12 @@ describe('CLI 端到端', () => {
     }
   })
 
-  test('非交互环境不带 --yes 时取消执行', () => {
+  test('未收到确认输入时取消执行', () => {
     const fixture = makeFixture()
     try {
       makeSession(fixture.dshHome, 'proj-a', 'session-old-1', 120)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1']))
-      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, '')
       assert.equal(result.status, 0)
       assert.match(result.stdout, /已取消/)
       assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-old-1')), true)
@@ -265,7 +265,7 @@ describe('CLI 端到端', () => {
     try {
       makeSession(fixture.dshHome, 'proj-a', 'session-old-1', 120)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1']))
-      const result = runCli(['--apply', '--yes', '--no-config', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--no-config', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
       assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-old-1')), false)
       assert.deepEqual(readWorkspaceFile(fixture.dshHome).global.archivedSessionIds, ['session-old-1'])
@@ -280,7 +280,7 @@ describe('CLI 端到端', () => {
       removeSessionsRoot(fixture.dshHome)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-a'], ['session-a', 'session-b']))
       const before = readWorkspaceText(fixture.dshHome)
-      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.notEqual(result.status, 0)
       assert.equal(result.status, 1)
       assert.match(result.stderr, /会话目录不存在/)
@@ -297,7 +297,7 @@ describe('CLI 端到端', () => {
       writeFileSync(join(fixture.dshHome, 'sessions'), 'not a directory', 'utf8')
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-a'], ['session-a', 'session-b']))
       const before = readWorkspaceText(fixture.dshHome)
-      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 1)
       assert.match(result.stderr, /会话目录不可用/)
       assert.equal(readWorkspaceText(fixture.dshHome), before)
@@ -312,7 +312,7 @@ describe('CLI 端到端', () => {
       removeSessionsRoot(fixture.dshHome)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-a'], ['session-a', 'session-b']))
       const before = readWorkspaceText(fixture.dshHome)
-      const result = runCli(['--apply', '--yes', '--allow-missing-sessions', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--allow-missing-sessions', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
       assert.match(result.stderr, /--allow-missing-sessions/)
       assert.equal(readWorkspaceText(fixture.dshHome), before)
@@ -326,7 +326,7 @@ describe('CLI 端到端', () => {
     try {
       makeSession(fixture.dshHome, 'proj-a', 'session-old-1', 120)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1']))
-      const result = runCli(['--apply', '--yes', '--lang', 'zh', '--backup', join(fixture.dshHome, 'trash')], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh', '--backup', join(fixture.dshHome, 'trash')], fixture.dshHome, 'y\n')
       assert.equal(result.status, 1)
       assert.match(result.stderr, /备份目录不能位于/)
       assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-old-1')), true)
@@ -341,7 +341,7 @@ describe('CLI 端到端', () => {
     try {
       makeSession(fixture.dshHome, 'solo', 'session-only', 120)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-only']))
-      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
       const projects = readdirSync(join(fixture.dshHome, 'sessions'))
       assert.deepEqual(projects, [])
@@ -364,9 +364,9 @@ describe('CLI 端到端', () => {
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-parent'], ['session-parent']))
       const result = runCli(['--lang', 'zh'], fixture.dshHome)
       assert.equal(result.status, 0)
-      assert.match(result.stdout, /血缘级联纳入删除: 1 个/)
+      assert.match(result.stdout, /子代理级联纳入删除: 1 个/)
       assert.match(result.stdout, /session-child .* 来源: session-parent/)
-      assert.equal(result.stdout.includes('因血缘后代无法处理'), false)
+      assert.equal(result.stdout.includes('因子代理后代无法处理'), false)
     } finally {
       fixture.cleanup()
     }
@@ -384,10 +384,10 @@ describe('CLI 端到端', () => {
         120,
       )
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-parent'], ['session-parent']))
-      const result = runCli(['--apply', '--yes', '--keep-children', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--keep-children', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
-      assert.match(result.stdout, /已按 --keep-children 跳过血缘级联/)
-      assert.match(result.stdout, /其中由血缘级联移除: 0 个/)
+      assert.match(result.stdout, /已按 --keep-children 跳过子代理级联/)
+      assert.match(result.stdout, /其中由子代理级联移除: 0 个/)
       assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-parent')), false)
       assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-child')), true)
     } finally {
@@ -410,9 +410,9 @@ describe('CLI 端到端', () => {
       const state = baseWorkspaceState(['session-parent'], ['session-parent', 'session-child', 'session-live'])
       state.global.pinnedSessionIds = ['session-child', 'session-live']
       writeWorkspaceJson(fixture.dshHome, state)
-      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
-      assert.match(result.stdout, /其中由血缘级联移除: 1 个/)
+      assert.match(result.stdout, /其中由子代理级联移除: 1 个/)
       assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-child')), false)
       const written = readWorkspaceFile(fixture.dshHome)
       assert.deepEqual(written.global.archivedSessionIds, [])
@@ -435,11 +435,11 @@ describe('CLI 端到端', () => {
         120,
       )
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-parent'], ['session-parent']))
-      const first = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      const first = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(first.status, 0)
       assert.match(first.stdout, /已移除会话目录: 2 个/)
-      assert.match(first.stdout, /其中由血缘级联移除: 1 个/)
-      const second = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      assert.match(first.stdout, /其中由子代理级联移除: 1 个/)
+      const second = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(second.status, 0)
       assert.match(second.stdout, /没有已归档的会话/)
       assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-child')), false)
@@ -460,9 +460,9 @@ describe('CLI 端到端', () => {
         1,
       )
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-parent'], ['session-parent']))
-      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
-      assert.match(result.stdout, /因血缘后代无法处理,以下 1 个归档会话本次保留/)
+      assert.match(result.stdout, /因子代理后代无法处理,以下 1 个归档会话本次保留/)
       assert.match(result.stdout, /原因: 后代 session-child 最近仍有写入/)
       assert.equal(existsSync(join(fixture.dshHome, 'sessions', '--proj-a--', 'session-parent')), true)
       assert.deepEqual(readWorkspaceFile(fixture.dshHome).global.archivedSessionIds, ['session-parent'])
@@ -471,14 +471,14 @@ describe('CLI 端到端', () => {
     }
   })
 
-  test('血缘诊断列出日志不可读的会话数', () => {
+  test('子代理关系诊断列出日志不可读的会话数', () => {
     const fixture = makeFixture()
     try {
       makeSession(fixture.dshHome, 'proj-a', 'session-old-1', 120)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1']))
       const result = runCli(['--lang', 'zh'], fixture.dshHome)
       assert.equal(result.status, 0)
-      assert.match(result.stdout, /血缘诊断: 1 条/)
+      assert.match(result.stdout, /子代理关系诊断: 1 条/)
     } finally {
       fixture.cleanup()
     }
@@ -511,7 +511,7 @@ describe('CLI 端到端', () => {
       makeAttachmentObject(fixture.dshHome, deletedOnly, 16)
       makeAttachmentObject(fixture.dshHome, shared, 16)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1'], ['session-old-1', 'session-live']))
-      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
       assert.match(result.stdout, /已回收附件对象: 1 个, 16 B/)
       assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, deletedOnly)), false)
@@ -528,7 +528,7 @@ describe('CLI 端到端', () => {
       makeReferenceLog(fixture.dshHome, 'proj-a', 'session-old-1', 'session.v4.jsonl.zstd', [digest])
       makeAttachmentObject(fixture.dshHome, digest, 16)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1']))
-      const result = runCli(['--apply', '--yes', '--keep-attachments', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--keep-attachments', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
       assert.match(result.stdout, /已按 --keep-attachments 跳过附件回收/)
       assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, digest)), true)
@@ -547,7 +547,7 @@ describe('CLI 端到端', () => {
       makeAttachmentObject(fixture.dshHome, digest, 16)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1']))
       const backupDir = join(fixture.root, 'backup')
-      const result = runCli(['--apply', '--yes', '--lang', 'zh', '--backup', backupDir], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh', '--backup', backupDir], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
       assert.match(result.stdout, /已回收附件对象: 1 个/)
       assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, digest)), false)
@@ -565,7 +565,7 @@ describe('CLI 端到端', () => {
       makeSession(fixture.dshHome, 'proj-a', 'session-live', 120, 'not a zstd container')
       makeAttachmentObject(fixture.dshHome, digest, 16)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-old-1'], ['session-old-1', 'session-live']))
-      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
       assert.match(result.stderr, /已跳过附件回收/)
       assert.match(result.stdout, /已移除会话目录: 1 个/)
@@ -577,7 +577,7 @@ describe('CLI 端到端', () => {
     }
   })
 
-  test('血缘级联删除的后代引用对象同样被回收', () => {
+  test('子代理级联删除的后代引用对象同样被回收', () => {
     const fixture = makeFixture()
     try {
       const parentOnly = makeDigest('1')
@@ -596,7 +596,7 @@ describe('CLI 端到端', () => {
       makeAttachmentObject(fixture.dshHome, parentOnly, 16)
       makeAttachmentObject(fixture.dshHome, childOnly, 16)
       writeWorkspaceState(fixture.dshHome, baseWorkspaceState(['session-parent'], ['session-parent']))
-      const result = runCli(['--apply', '--yes', '--lang', 'zh'], fixture.dshHome)
+      const result = runCli(['--apply', '--lang', 'zh'], fixture.dshHome, 'y\n')
       assert.equal(result.status, 0)
       assert.match(result.stdout, /已回收附件对象: 2 个, 32 B/)
       assert.equal(existsSync(attachmentObjectPath(fixture.dshHome, parentOnly)), false)

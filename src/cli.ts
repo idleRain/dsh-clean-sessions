@@ -26,11 +26,13 @@ import { bold, green, red, yellow } from './style.ts'
 /** 默认把最近仍可能活跃的归档会话视为可疑的最小空闲间隔,单位为分钟。 */
 const DEFAULT_MIN_AGE_MINUTES = 30
 
+/** 视为同意的确认输入,其余输入一律按拒绝处理。 */
+const AFFIRMATIVE_ANSWERS = new Set(['y', 'yes'])
+
 /** 解析命令行参数,布尔参数不接受值,值参数同时支持 --flag value 与 --flag=value。 */
 export function parseArgs(argv: readonly string[]): CliOptions {
   const options: CliOptions = {
     apply: false,
-    yes: false,
     minAgeMinutes: DEFAULT_MIN_AGE_MINUTES,
     includeRecent: false,
     keepChildren: false,
@@ -49,10 +51,6 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       case '--apply':
         assertNoValue(flag, inlineValue)
         options.apply = true
-        break
-      case '--yes':
-        assertNoValue(flag, inlineValue)
-        options.yes = true
         break
       case '--include-recent':
         assertNoValue(flag, inlineValue)
@@ -148,8 +146,8 @@ function describeSize(sizeBytes: number | null): string {
   return sizeBytes === null ? UNKNOWN_SIZE_TEXT : formatBytes(sizeBytes)
 }
 
-/** 血缘诊断最多展示的条数,避免长列表淹没计划主体。 */
-const MAX_LINEAGE_DIAGNOSTIC_LINES = 5
+/** 子代理关系诊断最多展示的条数,避免长列表淹没计划主体。 */
+const MAX_CASCADE_DIAGNOSTIC_LINES = 5
 
 /** 打印清理计划,分别列出待删除、级联后代、被阻止的祖先、活跃嫌疑、幽灵条目与逃逸项。 */
 function printPlan(plan: CleanPlan, minAgeMinutes: number, t: Translate): void {
@@ -159,7 +157,7 @@ function printPlan(plan: CleanPlan, minAgeMinutes: number, t: Translate): void {
   printRecentSection(plan, minAgeMinutes, t)
   printGhostSection(plan, t)
   printUnsafeSection(plan, t)
-  printLineageSection(plan, t)
+  printCascadeDiagnosticsSection(plan, t)
 }
 
 /** 打印归档名单内的待删会话。 */
@@ -241,14 +239,14 @@ function printUnsafeSection(plan: CleanPlan, t: Translate): void {
   console.log(t('unsafeHint'))
 }
 
-/** 打印血缘扫描诊断,超过展示上限的条目只计入总数。 */
-function printLineageSection(plan: CleanPlan, t: Translate): void {
-  if (plan.lineageWarnings.length === 0) return
-  console.log(yellow(`\n${t('lineageDiagnosticsHeader', { count: plan.lineageWarnings.length })}`))
-  for (const warning of plan.lineageWarnings.slice(0, MAX_LINEAGE_DIAGNOSTIC_LINES)) {
+/** 打印子代理关系诊断,超过展示上限的条目只计入总数。 */
+function printCascadeDiagnosticsSection(plan: CleanPlan, t: Translate): void {
+  if (plan.cascadeWarnings.length === 0) return
+  console.log(yellow(`\n${t('cascadeDiagnosticsHeader', { count: plan.cascadeWarnings.length })}`))
+  for (const warning of plan.cascadeWarnings.slice(0, MAX_CASCADE_DIAGNOSTIC_LINES)) {
     console.log(`  ${warning}`)
   }
-  console.log(t('lineageDiagnosticsHint'))
+  console.log(t('cascadeDiagnosticsHint'))
 }
 
 /**
@@ -290,19 +288,21 @@ function printAttachmentOutcome(outcome: ApplyOutcome, t: Translate): void {
   }
 }
 
-/** 在终端询问确认问题,非交互环境默认拒绝,输入以 y 或 yes 开头视为同意。 */
+/** 提示确认问题,只有输入 y 或 yes 才算同意;未收到输入时按拒绝处理,不阻塞等待。 */
 async function confirm(promptText: string): Promise<boolean> {
-  if (stdin.isTTY !== true) return false
   const readline = createInterface({ input: stdin, output: stdout })
-  let answer = ''
   try {
-    answer = (await readline.question(`${promptText} [y/N] `)).trim().toLowerCase()
+    const onClose = new Promise<string>(resolve => {
+      readline.once('close', () => resolve(''))
+    })
+    const answered = readline.question(`${promptText} [y/N] `).catch(() => '')
+    const answer = await Promise.race([answered, onClose])
+    return AFFIRMATIVE_ANSWERS.has(answer.trim().toLowerCase())
   } catch {
-    answer = ''
+    return false
   } finally {
     readline.close()
   }
-  return answer === 'y' || answer === 'yes'
 }
 
 /** 执行清理流程:前置检查、读取名单、构建计划、预览或执行删除与配置同步。 */
@@ -345,12 +345,10 @@ async function run(options: CliOptions, t: Translate): Promise<ExitCodeValue> {
   }
   const removalCount = plan.toDelete.length + plan.cascade.length
   const totalBytes = [...plan.toDelete, ...plan.cascade].reduce((sum, item) => sum + (item.sizeBytes ?? 0), 0)
-  if (!options.yes) {
-    const approved = await confirm(t('confirmPrompt', { count: removalCount, size: formatBytes(totalBytes) }))
-    if (!approved) {
-      console.log(t('cancelled'))
-      return ExitCode.Ok
-    }
+  const approved = await confirm(t('confirmPrompt', { count: removalCount, size: formatBytes(totalBytes) }))
+  if (!approved) {
+    console.log(t('cancelled'))
+    return ExitCode.Ok
   }
   const outcome = applyClean(options.dshHome, plan, {
     backupDir: options.backupDir,

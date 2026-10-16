@@ -1,27 +1,27 @@
 /**
- * DSH 会话日志的格式知识与血缘图谱:定位最高代规范日志、有界读取头行、构建子代理父子索引与血缘闭包。
+ * DSH 会话日志的格式知识与子代理关系图谱:定位最高代规范日志、有界读取头行、构建子代理父子索引与子代理闭包。
  * .jsonl.zstd 是按记录逐帧拼接的容器,头行恒为第 1 帧,读取压缩前缀即可解出头行而不载入整个日志。
- * @module dsh-clean-sessions/lineage
+ * @module dsh-clean-sessions/cascade
  */
 
 import { closeSync, openSync, readSync, readdirSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
 
-/** 会话头中与血缘相关的字段,扁平头与 meta 嵌套两种形态归一后的结果。 */
+/** 会话头中与子代理关系相关的字段,扁平头与 meta 嵌套两种形态归一后的结果。 */
 export interface SessionHeader {
   id?: string
   parentSession?: string
   origin?: string
 }
 
-/** 头行读取的三态结果:missing 表示没有规范日志,unknown 表示有日志但血缘无法确认。 */
+/** 头行读取的三态结果:missing 表示没有规范日志,unknown 表示有日志但子代理关系无法确认。 */
 export type HeaderReadResult =
   | { kind: 'ok'; header: SessionHeader }
   | { kind: 'unknown'; reason: string }
   | { kind: 'missing' }
 
-/** 子代理子会话索引的构建结果,diagnostics 记录无法确认血缘的会话。 */
+/** 子代理子会话索引的构建结果,diagnostics 记录无法确认子代理关系的会话。 */
 export interface ChildIndexResult {
   index: Map<string, string[]>
   diagnostics: string[]
@@ -90,7 +90,7 @@ function describeError(error: unknown): string {
 }
 
 /**
- * 归一化会话头中的血缘字段,同时兼容扁平头与 meta 嵌套两种形态。
+ * 归一化会话头中的子代理关系字段,同时兼容扁平头与 meta 嵌套两种形态。
  * 头行不是对象时返回 undefined,由调用方按无法确认处理。
  */
 export function normalizeSessionHeader(raw: unknown): SessionHeader | undefined {
@@ -103,7 +103,7 @@ export function normalizeSessionHeader(raw: unknown): SessionHeader | undefined 
   }
 }
 
-/** 读取会话目录内最高代规范日志的头行并归一血缘字段。 */
+/** 读取会话目录内最高代规范日志的头行并归一子代理关系字段。 */
 export function readSessionLogHeader(sessionDir: string): HeaderReadResult {
   const selection = pickSessionLogFile(sessionDir)
   if (selection.failure !== undefined) return { kind: 'unknown', reason: selection.failure }
@@ -122,7 +122,7 @@ export function readSessionLogHeader(sessionDir: string): HeaderReadResult {
   }
 }
 
-/** 解析头行 JSON 并归一血缘字段,首行不是 JSON 对象时返回带原因的结果。 */
+/** 解析头行 JSON 并归一子代理关系字段,首行不是 JSON 对象时返回带原因的结果。 */
 function parseHeaderLine(line: string): HeaderReadResult {
   let parsed: unknown
   try {
@@ -264,7 +264,7 @@ function appendIndexEntry(index: Map<string, string[]>, parentId: string, childI
   if (!children.includes(childId)) children.push(childId)
 }
 
-/** 反转父子索引,得到"子会话 id 到父会话 id 列表"的映射,用于沿血缘回溯。 */
+/** 反转父子索引,得到"子会话 id 到父会话 id 列表"的映射,用于沿子代理关系回溯。 */
 export function invertChildIndex(index: ReadonlyMap<string, readonly string[]>): Map<string, string[]> {
   const parentsByChild = new Map<string, string[]>()
   for (const [parentId, childIds] of index) {
@@ -275,7 +275,7 @@ export function invertChildIndex(index: ReadonlyMap<string, readonly string[]>):
 
 /**
  * 计算给定会话的全部子代理后代,结果不含根会话自身。
- * 血缘可能成环,遍历以已见集合去重,同一 id 只入队一次。
+ * 子代理关系可能成环,遍历以已见集合去重,同一 id 只入队一次。
  */
 export function collectSubagentDescendants(
   rootIds: Iterable<string>,

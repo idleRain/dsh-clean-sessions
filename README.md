@@ -30,7 +30,7 @@ npx dsh-clean-sessions --help
 
 ```bash
 dsh-clean-sessions                  # 预览,不修改任何文件
-dsh-clean-sessions --apply --yes    # 真正执行删除并同步配置
+dsh-clean-sessions --apply          # 真正执行删除并同步配置,执行前需在终端确认
 ```
 
 ### 选项
@@ -38,10 +38,9 @@ dsh-clean-sessions --apply --yes    # 真正执行删除并同步配置
 | 选项 | 说明 |
 |---|---|
 | `--apply` | 真正执行删除与配置更新,默认只输出预览 |
-| `--yes` | 跳过删除前的确认提示,仅配合 `--apply` 使用 |
 | `--min-age <分钟>` | 最近多少分钟内有写入的归档会话视为可能活跃,默认 `30`,设为 `0` 关闭守卫 |
 | `--include-recent` | 强制纳入最近有写入的归档会话,默认排除 |
-| `--keep-children` | 只删除归档名单内的会话,不做血缘级联,子代理后代保留在磁盘上 |
+| `--keep-children` | 只删除归档名单内的会话,不做子代理级联,子代理后代保留在磁盘上 |
 | `--keep-attachments` | 跳过附件对象回收,只被待删会话引用的对象保留在磁盘上 |
 | `--backup <目录>` | 把会话目录移入备份目录而非直接删除,不能位于 DSH 主目录之内 |
 | `--no-config` | 只删除磁盘目录,不同步 `workspace.json` 配置 |
@@ -59,7 +58,7 @@ dsh-clean-sessions --home "D:\data\dsh"                         # 指定自定�
 
 ## 安全说明
 
-1. 默认仅预览,必须显式传入 `--apply` 才会修改文件;删除前有确认提示,非交互环境默认拒绝。
+1. 默认仅预览,必须显式传入 `--apply` 才会修改文件;删除前有确认提示,非交互环境未收到确认输入时拒绝。
 2. 默认删除归档名单内的会话,并级联删除这些会话衍生的 `origin === 'subagent'` 子代理会话,级联递归到多级;级联范围内的会话可能不在归档名单内,同样会被删除。基于会话 fork 出来的独立会话不属于级联范围,不会被删除,也不会沿它继续向下遍历。加 `--keep-children` 时只删除归档名单内的会话,子代理后代保留在磁盘上,DSH 界面不再提供触达入口。最近写入的会话默认跳过,无法读取的会话目录按可能活跃处理。
 3. 若某个后代最近仍有写入,或该后代位于 sessions 根目录之外,其祖先本次保留,预览中会给出可操作的原因,避免留下无法处理的孤儿;加 `--include-recent` 可把最近有写入的后代一并纳入。后代目录不可核实时,工具在修改任何文件之前以退出码 `1` 终止。
 4. 位于 sessions 根目录之外的目录疑似符号链接逃逸,只列出并跳过,不会删除。
@@ -116,7 +115,7 @@ npx dsh-clean-sessions --help
 
 ```bash
 dsh-clean-sessions                  # preview, changes nothing
-dsh-clean-sessions --apply --yes    # delete and sync the config
+dsh-clean-sessions --apply          # delete and sync the config, after an interactive confirmation
 ```
 
 ### Options
@@ -124,10 +123,9 @@ dsh-clean-sessions --apply --yes    # delete and sync the config
 | Option | Description |
 |---|---|
 | `--apply` | Actually delete and update the config; preview by default |
-| `--yes` | Skip the confirmation prompt; only with `--apply` |
 | `--min-age <minutes>` | Treat sessions written within this many minutes as potentially active; default `30`, `0` disables the guard |
 | `--include-recent` | Force-include recently written sessions (skipped by default) |
-| `--keep-children` | Delete only the archived sessions and skip lineage cascading, leaving subagent descendants on disk |
+| `--keep-children` | Delete only the archived sessions and skip subagent cascading, leaving subagent descendants on disk |
 | `--keep-attachments` | Skip attachment object reclamation, leaving objects that only the deleted sessions referenced on disk |
 | `--backup <dir>` | Move session directories into a backup dir instead of deleting; must be outside the DSH home |
 | `--no-config` | Only remove on-disk directories, skip the `workspace.json` sync |
@@ -146,8 +144,8 @@ dsh-clean-sessions --home "D:\data\dsh"                          # custom DSH ho
 ## Safety notes
 
 1. Preview only by default; `--apply` is required to change anything. A
-   confirmation prompt guards destructive runs, and non-interactive stdin
-   defaults to no.
+   confirmation prompt guards destructive runs, and a non-interactive stdin
+   without confirmation input refuses the run.
 2. The archived sessions are deleted by default, together with the
    `origin === 'subagent'` subagent sessions they derived, recursively to any
    depth; cascade entries may lie outside the archive list and are removed as

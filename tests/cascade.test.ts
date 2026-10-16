@@ -11,13 +11,13 @@ import {
   invertChildIndex,
   readSessionLogHeader,
   type SessionHeader,
-} from '../src/lineage.ts'
+} from '../src/cascade.ts'
 import { encodeZstdFrames, makeFixture, makeSessionLog, makeZstdSession } from './helpers.ts'
 
 /** 与实现约定的头行前缀上限一致,用于构造首行超长的日志。 */
 const OVERSIZED_HEADER_BYTES = 64 * 1024 + 1
 
-/** 断言头行读取成功并返回归一后的血缘字段。 */
+/** 断言头行读取成功并返回归一后的子代理关系字段。 */
 function expectHeader(sessionDir: string): SessionHeader {
   const result = readSessionLogHeader(sessionDir)
   assert.equal(result.kind, 'ok')
@@ -291,7 +291,7 @@ describe('collectSubagentDescendants', () => {
   })
 })
 
-describe('血缘回溯', () => {
+describe('子代理关系回溯', () => {
   test('反转索引后可沿直接父回溯祖先,范围之外的父不再向上', () => {
     const index = new Map([['a', ['b']], ['b', ['c']]])
     const parentsByChild = invertChildIndex(index)
@@ -301,7 +301,7 @@ describe('血缘回溯', () => {
   })
 })
 
-describe('buildPlan 血缘级联', () => {
+describe('buildPlan 子代理级联', () => {
   test('子代理后代随父会话级联删除,fork 及其派生后代保留', () => {
     const fixture = makeFixture()
     try {
@@ -480,7 +480,7 @@ describe('buildPlan 血缘级联', () => {
     }
   })
 
-  test('血缘成环时计划构建不死循环', () => {
+  test('子代理关系成环时计划构建不死循环', () => {
     const fixture = makeFixture()
     try {
       makeZstdSession(
@@ -553,8 +553,8 @@ describe('buildPlan 血缘级联', () => {
       makeSessionLog(fixture.dshHome, 'proj-b', 'session-unreadable', 'session.v4.jsonl.zstd', 'data', 120)
       const plan = buildPlan(fixture.dshHome, ['session-parent'], 30, false)
       assert.deepEqual(plan.toDelete.map(item => item.id), ['session-parent'])
-      assert.equal(plan.lineageWarnings.length, 1)
-      assert.match(plan.lineageWarnings[0] ?? '', /session-unreadable/)
+      assert.equal(plan.cascadeWarnings.length, 1)
+      assert.match(plan.cascadeWarnings[0] ?? '', /session-unreadable/)
     } finally {
       fixture.cleanup()
     }

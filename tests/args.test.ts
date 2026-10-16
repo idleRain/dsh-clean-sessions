@@ -10,7 +10,6 @@ describe('parseArgs', () => {
   test('默认值为预览模式与 30 分钟活跃守卫', () => {
     const options = parseArgs([])
     assert.equal(options.apply, false)
-    assert.equal(options.yes, false)
     assert.equal(options.minAgeMinutes, 30)
     assert.equal(options.includeRecent, false)
     assert.equal(options.keepChildren, false)
@@ -21,9 +20,8 @@ describe('parseArgs', () => {
   })
 
   test('布尔参数逐一生效', () => {
-    const options = parseArgs(['--apply', '--yes', '--include-recent', '--keep-children', '--keep-attachments', '--no-config', '--allow-missing-sessions', '--help', '--version'])
+    const options = parseArgs(['--apply', '--include-recent', '--keep-children', '--keep-attachments', '--no-config', '--allow-missing-sessions', '--help', '--version'])
     assert.equal(options.apply, true)
-    assert.equal(options.yes, true)
     assert.equal(options.includeRecent, true)
     assert.equal(options.keepChildren, true)
     assert.equal(options.keepAttachments, true)

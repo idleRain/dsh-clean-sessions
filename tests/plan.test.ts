@@ -76,7 +76,7 @@ describe('buildPlan', () => {
     }
   })
 
-  test('没有待删会话时不做血缘扫描,级联与诊断均为空', () => {
+  test('没有待删会话时不做子代理关系扫描,级联与诊断均为空', () => {
     const fixture = makeFixture()
     try {
       makeSession(fixture.dshHome, 'proj-a', 'session-unreadable', 120)
@@ -84,7 +84,7 @@ describe('buildPlan', () => {
       assert.deepEqual(plan.toDelete, [])
       assert.deepEqual(plan.cascade, [])
       assert.deepEqual(plan.blocked, [])
-      assert.deepEqual(plan.lineageWarnings, [])
+      assert.deepEqual(plan.cascadeWarnings, [])
     } finally {
       fixture.cleanup()
     }

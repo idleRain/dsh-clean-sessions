@@ -1,5 +1,5 @@
 /**
- * 清理计划的构建:把归档 id 名单按磁盘状态、活跃度与路径安全性归类,再按血缘展开子代理后代。
+ * 清理计划的构建:把归档 id 名单按磁盘状态、活跃度与路径安全性归类,再按子代理关系展开其后代。
  * 级联只作用于 origin 为 subagent 的子会话,基于会话 fork 出来的独立会话不参与。
  * @module dsh-clean-sessions/plan
  */
@@ -17,10 +17,10 @@ import {
   collectSubagentAncestors,
   collectSubagentDescendants,
   invertChildIndex,
-} from './lineage.ts'
+} from './cascade.ts'
 import type { BlockedReason, CleanPlan, SessionLocation, SessionPlan } from './types.ts'
 
-/** 归档会话的归类结果,不含血缘信息。 */
+/** 归档会话的归类结果,不含子代理关系信息。 */
 type PlanGroups = Pick<CleanPlan, 'toDelete' | 'recentExcluded' | 'ghosts' | 'unsafe'>
 
 /** 归档名单内会话的既有归类,用于避免对名单内的后代重复判定。 */
@@ -59,12 +59,12 @@ export function buildPlan(
 ): CleanPlan {
   const groups = classifyArchived(dshHome, archivedIds, minAgeMinutes, includeRecent)
   if (keepChildren || groups.toDelete.length === 0) {
-    return { ...groups, cascade: [], blocked: [], lineageWarnings: [] }
+    return { ...groups, cascade: [], blocked: [], cascadeWarnings: [] }
   }
   return { ...groups, ...collectCascade(dshHome, groups, minAgeMinutes, includeRecent) }
 }
 
-/** 逐项定位归档会话并归类,此阶段不涉及血缘。 */
+/** 逐项定位归档会话并归类,此阶段不涉及子代理关系。 */
 function classifyArchived(
   dshHome: string,
   archivedIds: readonly string[],
@@ -109,19 +109,19 @@ function locateSession(root: string, rootReal: string | null, id: string): Locat
   return { kind: 'found', location }
 }
 
-/** 展开待删会话的子代理后代,产出级联项、被后代阻止的祖先与血缘诊断。 */
+/** 展开待删会话的子代理后代,产出级联项、被后代阻止的祖先与子代理关系诊断。 */
 function collectCascade(
   dshHome: string,
   groups: PlanGroups,
   minAgeMinutes: number,
   includeRecent: boolean,
-): Pick<CleanPlan, 'toDelete' | 'cascade' | 'blocked' | 'lineageWarnings'> {
+): Pick<CleanPlan, 'toDelete' | 'cascade' | 'blocked' | 'cascadeWarnings'> {
   const root = sessionsRoot(dshHome)
   const { index, diagnostics } = buildSubagentChildIndex(root)
   const deleteIds = new Set(groups.toDelete.map(item => item.id))
   const descendantIds = [...collectSubagentDescendants(deleteIds, index)].sort()
   if (descendantIds.length === 0) {
-    return { toDelete: groups.toDelete, cascade: [], blocked: [], lineageWarnings: diagnostics }
+    return { toDelete: groups.toDelete, cascade: [], blocked: [], cascadeWarnings: diagnostics }
   }
   const context: CascadeContext = {
     root,
@@ -151,7 +151,7 @@ function resolveCascade(
   context: CascadeContext,
   descendantIds: readonly string[],
   diagnostics: readonly string[],
-): Pick<CleanPlan, 'toDelete' | 'cascade' | 'blocked' | 'lineageWarnings'> {
+): Pick<CleanPlan, 'toDelete' | 'cascade' | 'blocked' | 'cascadeWarnings'> {
   const deletable: SessionPlan[] = []
   const blockedDescendants = new Map<string, BlockedReason>()
   for (const id of descendantIds) {
@@ -165,7 +165,7 @@ function resolveCascade(
   const stayingRoots = new Set([...ancestors, ...blockedDescendants.keys()])
   const staying = new Set([...stayingRoots, ...collectSubagentDescendants(stayingRoots, context.index)])
   const { toDelete, blocked } = splitBlockedAncestors(groups, ancestors, blockedDescendants, context, scope)
-  return { toDelete, cascade: deletable.filter(item => !staying.has(item.id)), blocked, lineageWarnings: [...diagnostics] }
+  return { toDelete, cascade: deletable.filter(item => !staying.has(item.id)), blocked, cascadeWarnings: [...diagnostics] }
 }
 
 /** 从待删集合中分离出被后代阻止的祖先,并附上可展示的原因。 */
